@@ -8,7 +8,9 @@ create table public.habits (
   color integer not null,
   daily_goal integer not null check (daily_goal > 0),
   unit text not null default 'times',
+  category text not null default '',
   reminder jsonb not null default '{"mode":"none"}'::jsonb,
+  icon_base64 text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   deleted_at timestamptz
