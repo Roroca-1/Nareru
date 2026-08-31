@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'models.dart';
 import 'linux_notifications.dart';
+import 'native_notifications.dart';
 
 class NareruStore extends ChangeNotifier {
   static const schemaVersion = 1;
@@ -32,6 +33,7 @@ class NareruStore extends ChangeNotifier {
         _replaceFromJson(jsonDecode(await file.readAsString()) as Map<String, dynamic>);
       }
       await LinuxNotifications.refresh(file);
+      await NativeNotifications.reschedule(habits);
     } catch (error) {
       syncError = error.toString();
     } finally {
@@ -68,7 +70,12 @@ class NareruStore extends ChangeNotifier {
       await temp.rename(file.path);
     }
     if (refreshNotifications) {
-      await LinuxNotifications.refresh(file);
+      try {
+        await LinuxNotifications.refresh(file);
+        await NativeNotifications.reschedule(habits);
+      } catch (error) {
+        syncError = 'Reminder setup failed: $error';
+      }
     }
     notifyListeners();
   }
@@ -103,9 +110,14 @@ class NareruStore extends ChangeNotifier {
     return uri?.toString();
   }
 
-  Future<String> notificationStatus() => LinuxNotifications.status();
-  Future<void> repairNotifications() async => LinuxNotifications.refresh(await _file);
-  Future<void> testNotification() => LinuxNotifications.test();
+  Future<String> notificationStatus() => Platform.isLinux
+    ? LinuxNotifications.status()
+    : Future.value('Uses ${Platform.operatingSystem} native notifications');
+  Future<void> repairNotifications() async {
+    await LinuxNotifications.refresh(await _file);
+    await NativeNotifications.reschedule(habits);
+  }
+  Future<void> testNotification() => NativeNotifications.test();
 
   Future<void> importBackup() async {
     final picked = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: const ['json']);
