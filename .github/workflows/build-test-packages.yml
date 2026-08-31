@@ -26,7 +26,7 @@ jobs:
       - run: flutter create . --platforms=android
       - run: flutter pub get
       - run: flutter analyze
-      - run: flutter build apk --debug --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+      - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
           name: nareru-android-debug
@@ -41,17 +41,17 @@ jobs:
           - name: Linux
             os: ubuntu-latest
             platform: linux
-            command: flutter build linux --debug --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+            command: flutter build linux --debug
             artifact: build/linux/x64/debug/bundle
           - name: Windows
             os: windows-latest
             platform: windows
-            command: flutter build windows --debug --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+            command: flutter build windows --debug
             artifact: build/windows/x64/runner/Debug
           - name: macOS
             os: macos-latest
             platform: macos
-            command: flutter build macos --debug --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+            command: flutter build macos --debug
             artifact: build/macos/Build/Products/Debug/*.app
     runs-on: ${{ matrix.os }}
     steps:
@@ -82,7 +82,7 @@ jobs:
           cache: true
       - run: flutter create . --platforms=ios
       - run: flutter pub get
-      - run: flutter build ios --simulator --debug --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+      - run: flutter build ios --simulator --debug
       - uses: actions/upload-artifact@v4
         with:
           name: nareru-ios-unsigned-debug
