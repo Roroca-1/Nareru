@@ -324,7 +324,15 @@ class _HabitEditorState extends State<HabitEditor> {
     final initial = target == 'fixed' ? fixedTime : target == 'start' ? windowStart : windowEnd;
     final value = await showTimePicker(context: context, initialTime: initial);
     if (value == null) return;
-    setState(() { if (target == 'fixed') fixedTime = value; else if (target == 'start') windowStart = value; else windowEnd = value; });
+    setState(() {
+      if (target == 'fixed') {
+        fixedTime = value;
+      } else if (target == 'start') {
+        windowStart = value;
+      } else {
+        windowEnd = value;
+      }
+    });
   }
 
   @override Widget build(BuildContext context) => Padding(
