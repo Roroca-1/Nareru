@@ -33,7 +33,7 @@ class NareruStore extends ChangeNotifier {
       }
       await LinuxNotifications.refresh(file);
     } catch (error) {
-      syncError = 'Could not read local data: $error';
+      syncError = error.toString();
     } finally {
       loading = false;
       notifyListeners();
@@ -78,16 +78,34 @@ class NareruStore extends ChangeNotifier {
   Future<void> remove(Habit habit) async {
     habits.remove(habit); deletedHabits[habit.id] = DateTime.now().toUtc(); await save(refreshNotifications: true);
   }
-  Future<void> log(Habit habit, int delta) async {
-    final d = day(DateTime.now());
+  Future<void> log(Habit habit, int delta, [DateTime? date]) async {
+    final d = day(date ?? DateTime.now());
     habit.history[d] = (habit.count(d) + delta).clamp(0, 9999);
     habit.touch();
     await save();
   }
 
-  Future<Uri?> exportBackup() => FilePicker.saveFile(
-    fileName: 'nareru-data.json', bytes: Uint8List.fromList(utf8.encode(const JsonEncoder.withIndent('  ').convert(toJson()))),
-    mimeType: 'application/json', type: FileType.custom, allowedExtensions: const ['json']);
+  Future<String?> exportBackup() async {
+    final bytes = Uint8List.fromList(utf8.encode(const JsonEncoder.withIndent('  ').convert(toJson())));
+    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+      final directory = await FilePicker.getDirectoryPath(
+        dialogTitle: 'Choose backup folder',
+        initialDirectory: File(Platform.resolvedExecutable).parent.path,
+      );
+      if (directory == null) return null;
+      final file = File('$directory${Platform.pathSeparator}nareru-data.json');
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    }
+    final uri = await FilePicker.saveFile(
+      fileName: 'nareru-data.json', bytes: bytes, mimeType: 'application/json',
+      type: FileType.custom, allowedExtensions: const ['json']);
+    return uri?.toString();
+  }
+
+  Future<String> notificationStatus() => LinuxNotifications.status();
+  Future<void> repairNotifications() async => LinuxNotifications.refresh(await _file);
+  Future<void> testNotification() => LinuxNotifications.test();
 
   Future<void> importBackup() async {
     final picked = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: const ['json']);
@@ -193,7 +211,7 @@ class NareruStore extends ChangeNotifier {
   Map<String, dynamic> _habitRow(Habit h, String uid) => {
     'id': h.id, 'user_id': uid, 'name': h.name, 'emoji': h.emoji,
     'color': h.color.toARGB32(), 'daily_goal': h.goal, 'unit': h.unit,
-    'category': h.category, 'reminder': h.reminder.toJson(),
+    'category': h.category, 'reminder': h.reminder.toJson(), 'schedule': h.schedule.toJson(),
     'icon_base64': h.imageBytes == null ? null : base64Encode(h.imageBytes!),
     'created_at': h.createdAt.toIso8601String(), 'updated_at': h.updatedAt.toIso8601String(),
     'deleted_at': null,
@@ -201,7 +219,7 @@ class NareruStore extends ChangeNotifier {
   Habit _habitFromRemote(Map<String, dynamic> row) => Habit.fromJson({
     'id': row['id'], 'name': row['name'], 'emoji': row['emoji'], 'color': row['color'],
     'goal': row['daily_goal'], 'unit': row['unit'], 'category': row['category'],
-    'reminder': row['reminder'], 'image': row['icon_base64'],
+    'reminder': row['reminder'], 'schedule': row['schedule'], 'image': row['icon_base64'],
     'created_at': row['created_at'], 'updated_at': row['updated_at'], 'history': <String, int>{},
   });
   void _applyRemoteHabit(Habit h, Map<String, dynamic> row) {
@@ -213,6 +231,7 @@ class NareruStore extends ChangeNotifier {
       ..unit = remote.unit
       ..category = remote.category
       ..reminder = remote.reminder
+      ..schedule = remote.schedule
       ..color = remote.color
       ..imageBytes = remote.imageBytes
       ..updatedAt = remote.updatedAt;
