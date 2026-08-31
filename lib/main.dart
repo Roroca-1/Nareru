@@ -17,7 +17,7 @@ Future<void> main(List<String> args) async {
   const url = String.fromEnvironment('SUPABASE_URL');
   const key = String.fromEnvironment('SUPABASE_ANON_KEY');
   if (url.isNotEmpty && key.isNotEmpty) {
-    await Supabase.initialize(url: url, anonKey: key);
+    await Supabase.initialize(url: url, publishableKey: key);
   }
   runApp(const NareruApp());
 }
