@@ -201,21 +201,42 @@ class _TodayPageState extends State<TodayPage> {
     return Frame(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
         Expanded(child: Text('This week', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700))),
-        FilterChip(label: const Text('All habits'), selected: showAll, onSelected: (v) => setState(() => showAll = v)),
+        FilterChip(label: const Text('Manage habits'), avatar: const Icon(Icons.edit_outlined, size: 18),
+          selected: showAll, onSelected: (v) => setState(() => showAll = v)),
       ]),
       const SizedBox(height: 12),
-      Row(children: week.map((d) {
-        final due = widget.habits.where((h) => h.schedule.isDue(d)).toList();
-        final done = due.where((h) => h.count(d) >= h.goal).length;
-        return Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: InkWell(
-          borderRadius: BorderRadius.circular(14), onTap: () => setState(() { selected = d; showAll = false; }),
-          child: Container(padding: const EdgeInsets.symmetric(vertical: 9), decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14), color: day(selected) == d ? Theme.of(context).colorScheme.primaryContainer : null,
-            border: Border.all(color: d == today ? Theme.of(context).colorScheme.primary : Colors.transparent)),
-            child: Column(children: [Text(weekday[d.weekday - 1], style: const TextStyle(fontSize: 12)),
-              Text('${d.day}', style: const TextStyle(fontWeight: FontWeight.w700)),
-              Text(due.isEmpty ? '—' : '$done/${due.length}', style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant))])))));
-      }).toList()),
+      LayoutBuilder(builder: (context, constraints) {
+        Widget card(DateTime d) {
+          final due = widget.habits.where((h) => h.schedule.isDue(d)).toList();
+          final done = due.where((h) => h.count(d) >= h.goal).length;
+          final count = due.fold<int>(0, (sum, h) => sum + h.count(d));
+          final goals = due.fold<int>(0, (sum, h) => sum + h.goal);
+          return InkWell(borderRadius: BorderRadius.circular(16), onTap: () => setState(() { selected = d; showAll = false; }),
+            child: Container(width: 128, height: 144, padding: const EdgeInsets.all(10), decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16), color: day(selected) == d ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceContainerLow,
+              border: Border.all(color: d == today ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.outlineVariant)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [Expanded(child: Text(weekday[d.weekday - 1], style: const TextStyle(fontWeight: FontWeight.w700))),
+                  Text('${d.day}', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800))]),
+                const SizedBox(height: 7),
+                if (due.isEmpty) Text('No habits', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant))
+                else ...[
+                  ...due.take(3).map((h) => Padding(padding: const EdgeInsets.only(bottom: 3), child: Text('${h.emoji} ${h.name}',
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)))),
+                  if (due.length > 3) Text('+${due.length - 3} more', style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                ],
+                const Spacer(),
+                Text(due.isEmpty ? 'Free day' : '$done/${due.length} habits • $count/$goals',
+                  maxLines: 1, style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ]));
+        }
+        if (constraints.maxWidth < 760) {
+          return SizedBox(height: 144, child: ListView.separated(scrollDirection: Axis.horizontal, itemCount: week.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8), itemBuilder: (_, i) => card(week[i])));
+        }
+        return Row(crossAxisAlignment: CrossAxisAlignment.start, children: week.map((d) => Expanded(
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 3), child: card(d)))).toList());
+      }),
       const SizedBox(height: 12),
       Text(showAll ? '${widget.habits.length} habits' : '${scheduled.length} scheduled • $complete complete',
         style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
@@ -225,7 +246,7 @@ class _TodayPageState extends State<TodayPage> {
             message: 'Nareru has no default habits. Use New habit below to begin.')
         : shown.isEmpty
           ? const EmptyState(icon: Icons.event_available_outlined, title: 'Nothing scheduled',
-              message: 'Choose another day or open All habits to manage your habits.')
+              message: 'Choose another day or open Manage habits to edit your habits.')
           : ListView.separated(padding: const EdgeInsets.only(bottom: 84), itemCount: shown.length,
               separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (_, i) {
                 final h = shown[i], n = h.count(selected), due = h.schedule.isDue(selected);
