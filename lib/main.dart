@@ -1,332 +1,422 @@
 import 'dart:math';
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 void main() => runApp(const NareruApp());
+DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
 
-class NareruApp extends StatelessWidget {
+enum ReminderMode { none, fixedTime, interval }
+
+class Reminder {
+  const Reminder.none() : mode = ReminderMode.none, time = null, minutes = null, start = null, end = null;
+  const Reminder.fixed(this.time) : mode = ReminderMode.fixedTime, minutes = null, start = null, end = null;
+  const Reminder.interval(this.minutes, this.start, this.end) : mode = ReminderMode.interval, time = null;
+  final ReminderMode mode;
+  final TimeOfDay? time, start, end;
+  final int? minutes;
+  String label(BuildContext c) => switch (mode) {
+    ReminderMode.none => 'No reminder',
+    ReminderMode.fixedTime => 'Every day at ${time!.format(c)}',
+    ReminderMode.interval => 'Every $minutes min • ${start!.format(c)}–${end!.format(c)}',
+  };
+}
+
+class Habit {
+  Habit({required this.name, required this.emoji, required this.goal, required this.unit,
+    required this.category, required this.reminder, required this.color, this.imageBytes,
+    Map<DateTime, int>? history}) : history = history ?? {};
+  String name, emoji, unit, category;
+  int goal;
+  Reminder reminder;
+  Color color;
+  Uint8List? imageBytes;
+  final Map<DateTime, int> history;
+  int count(DateTime d) => history[day(d)] ?? 0;
+}
+
+class NareruApp extends StatefulWidget {
   const NareruApp({super.key});
+  @override State<NareruApp> createState() => _NareruAppState();
+}
 
-  @override
-  Widget build(BuildContext context) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xff507d61),
-      brightness: Brightness.light,
+class _NareruAppState extends State<NareruApp> {
+  ThemeMode mode = ThemeMode.system;
+  Color seed = const Color(0xff507d61);
+  @override Widget build(BuildContext context) {
+    ThemeData theme(Brightness b) => ThemeData(
+      useMaterial3: true, brightness: b,
+      colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: b),
+      cardTheme: const CardThemeData(elevation: 0, margin: EdgeInsets.zero),
     );
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Nareru',
-      theme: ThemeData(
-        colorScheme: scheme,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xfff7f8f4),
-        cardTheme: const CardThemeData(elevation: 0, margin: EdgeInsets.zero),
-      ),
-      home: const HabitShell(),
+      debugShowCheckedModeBanner: false, title: 'Nareru',
+      theme: theme(Brightness.light), darkTheme: theme(Brightness.dark), themeMode: mode,
+      home: HabitShell(themeMode: mode, seed: seed, onTheme: (m, s) => setState(() { mode = m; seed = s; })),
     );
   }
 }
 
-class Habit {
-  Habit({required this.name, required this.emoji, required this.goal,
-    required this.unit, required this.reminder, required this.color,
-    Map<DateTime, int>? history}) : history = history ?? {};
-
-  final String name, emoji, unit, reminder;
-  final int goal;
-  final Color color;
-  final Map<DateTime, int> history;
-
-  int count(DateTime date) => history[day(date)] ?? 0;
-  bool complete(DateTime date) => count(date) >= goal;
-}
-
-DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
-
 class HabitShell extends StatefulWidget {
-  const HabitShell({super.key});
+  const HabitShell({super.key, required this.themeMode, required this.seed, required this.onTheme});
+  final ThemeMode themeMode; final Color seed; final void Function(ThemeMode, Color) onTheme;
   @override State<HabitShell> createState() => _HabitShellState();
 }
 
 class _HabitShellState extends State<HabitShell> {
   int page = 0;
-  late final List<Habit> habits = _demoHabits();
+  final habits = <Habit>[];
 
-  void increment(Habit habit, [int delta = 1]) {
+  void log(Habit h, [int delta = 1]) => setState(() {
+    final d = day(DateTime.now());
+    h.history[d] = max(0, h.count(d) + delta);
+  });
+
+  Future<void> edit([Habit? old]) async {
+    final h = await showModalBottomSheet<Habit>(
+      context: context, isScrollControlled: true, showDragHandle: true,
+      builder: (_) => HabitEditor(existing: old),
+    );
+    if (h == null) return;
     setState(() {
-      final today = day(DateTime.now());
-      habit.history[today] = max(0, habit.count(today) + delta);
+      if (old == null) {
+        habits.add(h);
+      } else {
+        old
+          ..name = h.name
+          ..emoji = h.emoji
+          ..goal = h.goal
+          ..unit = h.unit
+          ..category = h.category
+          ..reminder = h.reminder
+          ..color = h.color
+          ..imageBytes = h.imageBytes;
+      }
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final wide = MediaQuery.sizeOf(context).width >= 720;
-    final body = IndexedStack(index: page, children: [
-      TodayPage(habits: habits, onIncrement: increment),
-      HabitsPage(habits: habits, onAdd: _showCreate),
-    ]);
-    if (wide) {
-      return Scaffold(
-        body: Row(children: [
-          NavigationRail(
-            selectedIndex: page,
-            onDestinationSelected: (v) => setState(() => page = v),
-            labelType: NavigationRailLabelType.all,
-            destinations: const [
-              NavigationRailDestination(icon: Icon(Icons.today_outlined), selectedIcon: Icon(Icons.today), label: Text('This week')),
-              NavigationRailDestination(icon: Icon(Icons.checklist_outlined), selectedIcon: Icon(Icons.checklist), label: Text('Habits')),
-            ],
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(child: body),
-        ]),
-      );
-    }
-    return Scaffold(
-      body: body,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: page,
-        onDestinationSelected: (v) => setState(() => page = v),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.today_outlined), selectedIcon: Icon(Icons.today), label: 'This week'),
-          NavigationDestination(icon: Icon(Icons.checklist_outlined), selectedIcon: Icon(Icons.checklist), label: 'Habits'),
-        ],
-      ),
-    );
+  Future<void> remove(Habit h) async {
+    final yes = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: Text('Delete ${h.name}?'),
+      content: const Text('The habit and its completion history will be deleted.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+      ],
+    ));
+    if (yes == true) setState(() => habits.remove(h));
   }
 
-  void _showCreate() {
-    showModalBottomSheet<void>(
-      context: context, isScrollControlled: true, showDragHandle: true,
-      builder: (_) => CreateHabitSheet(onCreate: (habit) {
-        setState(() => habits.add(habit));
-        Navigator.pop(context);
-      }),
-    );
-  }
-}
-
-class PageFrame extends StatelessWidget {
-  const PageFrame({super.key, required this.child});
-  final Widget child;
-  @override Widget build(BuildContext context) => SafeArea(
-    child: Align(alignment: Alignment.topCenter, child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 920),
-      child: Padding(padding: const EdgeInsets.all(20), child: child),
-    )),
+  void appearance() => showModalBottomSheet<void>(
+    context: context, showDragHandle: true,
+    builder: (_) => AppearanceSheet(mode: widget.themeMode, seed: widget.seed, onChanged: widget.onTheme),
   );
-}
-
-class TodayPage extends StatelessWidget {
-  const TodayPage({super.key, required this.habits, required this.onIncrement});
-  final List<Habit> habits;
-  final void Function(Habit, [int]) onIncrement;
 
   @override Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final done = habits.where((h) => h.complete(now)).length;
-    return PageFrame(child: ListView(children: [
-      Text('This week', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
-      const SizedBox(height: 4),
-      Text('$done of ${habits.length} habits complete today', style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.black54)),
-      const SizedBox(height: 20),
-      WeekStrip(habits: habits),
-      const SizedBox(height: 24),
-      Text('Today', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-      const SizedBox(height: 12),
-      ...habits.map((h) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: HabitTodayCard(habit: h, onIncrement: onIncrement),
-      )),
-      if (done == habits.length) Padding(
-        padding: const EdgeInsets.only(top: 12),
-        child: Text('Everything for today is done. Nice work — you can stop thinking about it.', textAlign: TextAlign.center,
-          style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.w600)),
+    final pages = [
+      TodayPage(habits: habits, onLog: log, onCreate: () => edit()),
+      HabitsPage(habits: habits, onCreate: () => edit(), onEdit: edit, onDelete: remove),
+      TrackingPage(habits: habits),
+    ];
+    const nav = [
+      NavigationDestination(icon: Icon(Icons.today_outlined), selectedIcon: Icon(Icons.today), label: 'This week'),
+      NavigationDestination(icon: Icon(Icons.checklist_outlined), selectedIcon: Icon(Icons.checklist), label: 'Habits'),
+      NavigationDestination(icon: Icon(Icons.insights_outlined), selectedIcon: Icon(Icons.insights), label: 'Tracking'),
+    ];
+    final body = IndexedStack(index: page, children: pages);
+    if (MediaQuery.sizeOf(context).width < 760) {
+      return Scaffold(
+        appBar: AppBar(actions: [IconButton(onPressed: appearance, icon: const Icon(Icons.palette_outlined), tooltip: 'Appearance')]),
+        body: body,
+        bottomNavigationBar: NavigationBar(selectedIndex: page, destinations: nav, onDestinationSelected: (v) => setState(() => page = v)),
+      );
+    }
+    return Scaffold(body: Row(children: [
+      NavigationRail(
+        selectedIndex: page, labelType: NavigationRailLabelType.all,
+        onDestinationSelected: (v) => setState(() => page = v),
+        trailing: Expanded(child: Align(alignment: Alignment.bottomCenter,
+          child: Padding(padding: const EdgeInsets.only(bottom: 16), child: IconButton(onPressed: appearance, icon: const Icon(Icons.palette_outlined), tooltip: 'Appearance')))),
+        destinations: nav.map((n) => NavigationRailDestination(icon: n.icon, selectedIcon: n.selectedIcon, label: Text(n.label))).toList(),
       ),
+      const VerticalDivider(width: 1), Expanded(child: body),
     ]));
   }
 }
 
-class WeekStrip extends StatelessWidget {
-  const WeekStrip({super.key, required this.habits});
-  final List<Habit> habits;
-  @override Widget build(BuildContext context) {
-    final today = day(DateTime.now());
-    final monday = today.subtract(Duration(days: today.weekday - 1));
-    return Card(color: Colors.white, child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
-      child: Row(children: List.generate(7, (i) {
-        final d = monday.add(Duration(days: i));
-        final completed = habits.where((h) => h.complete(d)).length;
-        final ratio = habits.isEmpty ? 0.0 : completed / habits.length;
-        return Expanded(child: Column(children: [
-          Text(['M','T','W','T','F','S','S'][i], style: const TextStyle(color: Colors.black54)),
-          const SizedBox(height: 8),
-          Container(width: 34, height: 34, alignment: Alignment.center,
-            decoration: BoxDecoration(shape: BoxShape.circle,
-              color: d == today ? Theme.of(context).colorScheme.primaryContainer : Colors.transparent,
-              border: Border.all(color: Colors.black12)),
-            child: Text('${d.day}', style: TextStyle(fontWeight: d == today ? FontWeight.w700 : FontWeight.w400))),
-          const SizedBox(height: 8),
-          ClipRRect(borderRadius: BorderRadius.circular(3), child: LinearProgressIndicator(value: ratio, minHeight: 5, backgroundColor: Colors.black12)),
-        ]));
-      })),
-    ));
-  }
+class Frame extends StatelessWidget {
+  const Frame({super.key, required this.child}); final Widget child;
+  @override Widget build(BuildContext context) => SafeArea(child: Align(alignment: Alignment.topCenter,
+    child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 920),
+      child: Padding(padding: const EdgeInsets.all(20), child: child))));
 }
 
-class HabitTodayCard extends StatelessWidget {
-  const HabitTodayCard({super.key, required this.habit, required this.onIncrement});
-  final Habit habit;
-  final void Function(Habit, [int]) onIncrement;
-  @override Widget build(BuildContext context) {
-    final count = habit.count(DateTime.now());
-    final complete = count >= habit.goal;
-    return Card(color: Colors.white, child: Padding(
-      padding: const EdgeInsets.all(14),
-      child: Row(children: [
-        CircleAvatar(backgroundColor: habit.color.withValues(alpha: .15), child: Text(habit.emoji)),
-        const SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(habit.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 3),
-          Text('$count / ${habit.goal} ${habit.unit}  •  ${habit.reminder}', style: const TextStyle(color: Colors.black54)),
-        ])),
-        if (count > 0) IconButton(tooltip: 'Undo one', onPressed: () => onIncrement(habit, -1), icon: const Icon(Icons.undo)),
-        FilledButton.tonalIcon(
-          onPressed: () => onIncrement(habit),
-          icon: Icon(complete ? Icons.add : Icons.check),
-          label: Text(complete ? '+1' : 'Done'),
-        ),
-      ]),
-    ));
-  }
-}
-
-class HabitsPage extends StatelessWidget {
-  const HabitsPage({super.key, required this.habits, required this.onAdd});
-  final List<Habit> habits;
-  final VoidCallback onAdd;
-  @override Widget build(BuildContext context) => PageFrame(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-    Row(children: [
-      Expanded(child: Text('Your habits', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700))),
-      FilledButton.icon(onPressed: onAdd, icon: const Icon(Icons.add), label: const Text('New habit')),
+class EmptyState extends StatelessWidget {
+  const EmptyState({super.key, required this.icon, required this.title, required this.message, this.action});
+  final IconData icon; final String title, message; final Widget? action;
+  @override Widget build(BuildContext context) => Center(child: ConstrainedBox(
+    constraints: const BoxConstraints(maxWidth: 360),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, size: 56, color: Theme.of(context).colorScheme.primary), const SizedBox(height: 16),
+      Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 8), Text(message, textAlign: TextAlign.center,
+        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      if (action != null) ...[const SizedBox(height: 20), action!],
     ]),
-    const SizedBox(height: 6),
-    const Text('Tap a habit to see its history.', style: TextStyle(color: Colors.black54)),
-    const SizedBox(height: 18),
-    Expanded(child: ListView.separated(
-      itemCount: habits.length, separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, i) {
-        final h = habits[i];
-        return Card(color: Colors.white, child: ListTile(
-          leading: CircleAvatar(backgroundColor: h.color.withValues(alpha: .15), child: Text(h.emoji)),
-          title: Text(h.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-          subtitle: Text('${h.goal} ${h.unit} • ${h.reminder}'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => HabitDetailPage(habit: h))),
-        ));
-      },
-    )),
+  ));
+}
+
+class TodayPage extends StatelessWidget {
+  const TodayPage({super.key, required this.habits, required this.onLog, required this.onCreate});
+  final List<Habit> habits; final void Function(Habit, [int]) onLog; final VoidCallback onCreate;
+  @override Widget build(BuildContext context) => Frame(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    Text('This week', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
+    const SizedBox(height: 16),
+    Expanded(child: habits.isEmpty
+      ? EmptyState(icon: Icons.spa_outlined, title: 'Start with one small thing',
+          message: 'Nareru has no default habits. Create only what matters to you.',
+          action: FilledButton.icon(onPressed: onCreate, icon: const Icon(Icons.add), label: const Text('Create habit')))
+      : ListView.separated(
+          itemCount: habits.length, separatorBuilder: (_, __) => const SizedBox(height: 10),
+          itemBuilder: (_, i) {
+            final h = habits[i], n = h.count(DateTime.now());
+            return Card(child: ListTile(
+              leading: HabitAvatar(habit: h), title: Text(h.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+              subtitle: Text('$n / ${h.goal} ${h.unit} • ${h.reminder.label(context)}'),
+              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (n > 0) IconButton(onPressed: () => onLog(h, -1), icon: const Icon(Icons.undo), tooltip: 'Undo'),
+                FilledButton.tonal(onPressed: () => onLog(h), child: Text(n >= h.goal ? '+1' : 'Done')),
+              ]),
+            ));
+          })),
   ]));
 }
 
-class HabitDetailPage extends StatelessWidget {
-  const HabitDetailPage({super.key, required this.habit});
-  final Habit habit;
+class HabitsPage extends StatelessWidget {
+  const HabitsPage({super.key, required this.habits, required this.onCreate, required this.onEdit, required this.onDelete});
+  final List<Habit> habits; final VoidCallback onCreate; final ValueChanged<Habit> onEdit, onDelete;
   @override Widget build(BuildContext context) {
-    final days = List.generate(140, (i) => day(DateTime.now()).subtract(Duration(days: 139 - i)));
-    final completed = days.where(habit.complete).length;
-    final total = days.fold<int>(0, (sum, d) => sum + habit.count(d));
-    return Scaffold(appBar: AppBar(title: Text('${habit.emoji}  ${habit.name}')), body: PageFrame(child: ListView(children: [
+    final groups = <String, List<Habit>>{};
+    for (final h in habits) {
+      groups.putIfAbsent(h.category.isEmpty ? 'Uncategorized' : h.category, () => []).add(h);
+    }
+    return Frame(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
-        Expanded(child: _Stat(value: '$completed', label: 'days completed')),
-        const SizedBox(width: 10),
-        Expanded(child: _Stat(value: '$total', label: habit.unit)),
+        Expanded(child: Text('Habits', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700))),
+        FilledButton.icon(onPressed: onCreate, icon: const Icon(Icons.add), label: const Text('New habit')),
       ]),
-      const SizedBox(height: 20),
-      Card(color: Colors.white, child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Last 20 weeks', style: TextStyle(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 14),
-        SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: List.generate(20, (week) => Padding(
-          padding: const EdgeInsets.only(right: 4), child: Column(children: List.generate(7, (weekday) {
-            final d = days[week * 7 + weekday];
-            final count = habit.count(d);
-            final strength = count == 0 ? 0.0 : min(1.0, count / habit.goal);
-            return Tooltip(message: '${d.year}-${d.month}-${d.day}: $count ${habit.unit}', child: Container(
-              width: 18, height: 18, margin: const EdgeInsets.only(bottom: 4),
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(3),
-                color: count == 0 ? const Color(0xffe7e9e5) : Color.lerp(habit.color.withValues(alpha: .25), habit.color, strength)),
+      const SizedBox(height: 16),
+      Expanded(child: habits.isEmpty
+        ? const EmptyState(icon: Icons.checklist, title: 'No habits yet', message: 'Create habits here, then edit, categorize, or delete them at any time.')
+        : ListView(children: groups.entries.expand((g) => [
+            Padding(padding: const EdgeInsets.fromLTRB(4, 14, 4, 8),
+              child: Text(g.key, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700))),
+            ...g.value.map((h) => Padding(padding: const EdgeInsets.only(bottom: 8), child: Card(child: ListTile(
+              leading: HabitAvatar(habit: h), title: Text(h.name), subtitle: Text(h.reminder.label(context)),
+              onTap: () => onEdit(h),
+              trailing: PopupMenuButton<String>(
+                onSelected: (v) => v == 'edit' ? onEdit(h) : onDelete(h),
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'edit', child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Edit'))),
+                  PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Delete'))),
+                ],
+              ),
+            )))),
+          ]).toList())),
+    ]));
+  }
+}
+
+class TrackingPage extends StatelessWidget {
+  const TrackingPage({super.key, required this.habits}); final List<Habit> habits;
+  @override Widget build(BuildContext context) => Frame(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    Text('Tracking', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
+    const SizedBox(height: 6), Text('Choose a habit to see its history.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+    const SizedBox(height: 16),
+    Expanded(child: habits.isEmpty
+      ? const EmptyState(icon: Icons.insights_outlined, title: 'Nothing to track yet', message: 'Progress will appear here after you create a habit.')
+      : ListView.separated(
+          itemCount: habits.length, separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (_, i) {
+            final h = habits[i];
+            return Card(child: ListTile(
+              leading: HabitAvatar(habit: h), title: Text(h.name),
+              subtitle: Text(h.category.isEmpty ? 'Uncategorized' : h.category),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => HabitDetailPage(habit: h))),
             ));
           })),
-        )))),
-        const SizedBox(height: 12),
-        const Text('Darker squares mean more completions. Hover or press a square for the exact count.', style: TextStyle(color: Colors.black54)),
-      ]))),
+  ]));
+}
+
+class HabitAvatar extends StatelessWidget {
+  const HabitAvatar({super.key, required this.habit}); final Habit habit;
+  @override Widget build(BuildContext context) => CircleAvatar(
+    backgroundColor: habit.color.withValues(alpha: .18),
+    backgroundImage: habit.imageBytes == null ? null : MemoryImage(habit.imageBytes!),
+    child: habit.imageBytes == null ? Text(habit.emoji) : null,
+  );
+}
+
+class HabitDetailPage extends StatelessWidget {
+  const HabitDetailPage({super.key, required this.habit}); final Habit habit;
+  @override Widget build(BuildContext context) {
+    final days = List.generate(140, (i) => day(DateTime.now()).subtract(Duration(days: 139 - i)));
+    final completed = days.where((d) => habit.count(d) >= habit.goal).length;
+    return Scaffold(appBar: AppBar(title: Text(habit.name)), body: Frame(child: ListView(children: [
+      Text('$completed days completed', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
       const SizedBox(height: 16),
-      ListTile(tileColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        leading: const Icon(Icons.notifications_outlined), title: const Text('Reminder'), subtitle: Text(habit.reminder), trailing: const Icon(Icons.chevron_right)),
+      Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Last 20 weeks', style: TextStyle(fontWeight: FontWeight.w700)), const SizedBox(height: 14),
+        SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: List.generate(20, (w) =>
+          Padding(padding: const EdgeInsets.only(right: 4), child: Column(children: List.generate(7, (wd) {
+            final d = days[w * 7 + wd], n = habit.count(d);
+            return Tooltip(message: '${d.year}-${d.month}-${d.day}: $n ${habit.unit}',
+              child: Container(width: 18, height: 18, margin: const EdgeInsets.only(bottom: 4),
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(3),
+                  color: n == 0 ? Theme.of(context).colorScheme.surfaceContainerHighest
+                    : Color.lerp(habit.color.withValues(alpha: .25), habit.color, min(1.0, n / habit.goal)))));
+          })))))),
+        const SizedBox(height: 10), Text('Darker squares mean more completions.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      ]))),
     ])));
   }
 }
 
-class _Stat extends StatelessWidget {
-  const _Stat({required this.value, required this.label});
-  final String value, label;
-  @override Widget build(BuildContext context) => Card(color: Colors.white, child: Padding(padding: const EdgeInsets.all(18), child: Column(children: [
-    Text(value, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800)),
-    Text(label, style: const TextStyle(color: Colors.black54)),
-  ])));
+class HabitEditor extends StatefulWidget {
+  const HabitEditor({super.key, this.existing}); final Habit? existing;
+  @override State<HabitEditor> createState() => _HabitEditorState();
 }
 
-class CreateHabitSheet extends StatefulWidget {
-  const CreateHabitSheet({super.key, required this.onCreate});
-  final ValueChanged<Habit> onCreate;
-  @override State<CreateHabitSheet> createState() => _CreateHabitSheetState();
-}
+class _HabitEditorState extends State<HabitEditor> {
+  static const emojis = ['🌱','💪','📖','🧘','🎨','✍️','🏃','🧹','💊','⭐','🎵','🧠'];
+  static const colors = [Color(0xff507d61), Color(0xff3f78b5), Color(0xff8b64b1), Color(0xffc06d42), Color(0xffb54d69), Color(0xff00897b)];
+  late final TextEditingController name, unit, category;
+  late int goal, interval;
+  late String emoji;
+  late Color color;
+  late ReminderMode reminderMode;
+  late TimeOfDay fixedTime, windowStart, windowEnd;
+  Uint8List? image;
 
-class _CreateHabitSheetState extends State<CreateHabitSheet> {
-  final name = TextEditingController();
-  int goal = 1;
-  String reminder = 'No reminder';
-  @override void dispose() { name.dispose(); super.dispose(); }
+  @override void initState() {
+    super.initState(); final h = widget.existing;
+    name = TextEditingController(text: h?.name ?? '');
+    unit = TextEditingController(text: h?.unit ?? 'times');
+    category = TextEditingController(text: h?.category ?? '');
+    goal = h?.goal ?? 1; emoji = h?.emoji ?? '🌱'; color = h?.color ?? colors.first; image = h?.imageBytes;
+    reminderMode = h?.reminder.mode ?? ReminderMode.none;
+    fixedTime = h?.reminder.time ?? const TimeOfDay(hour: 9, minute: 0);
+    interval = h?.reminder.minutes ?? 45;
+    windowStart = h?.reminder.start ?? const TimeOfDay(hour: 9, minute: 0);
+    windowEnd = h?.reminder.end ?? const TimeOfDay(hour: 21, minute: 0);
+  }
+  @override void dispose() { name.dispose(); unit.dispose(); category.dispose(); super.dispose(); }
+
+  Future<void> chooseImage() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
+    if (result != null && result.files.single.bytes != null) setState(() => image = result.files.single.bytes);
+  }
+  Future<void> chooseTime(String target) async {
+    final initial = target == 'fixed' ? fixedTime : target == 'start' ? windowStart : windowEnd;
+    final value = await showTimePicker(context: context, initialTime: initial);
+    if (value == null) return;
+    setState(() { if (target == 'fixed') fixedTime = value; else if (target == 'start') windowStart = value; else windowEnd = value; });
+  }
+
   @override Widget build(BuildContext context) => Padding(
     padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.viewInsetsOf(context).bottom + 24),
-    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Text('Create a habit', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
+    child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text(widget.existing == null ? 'Create habit' : 'Edit habit', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
       const SizedBox(height: 16),
-      TextField(controller: name, autofocus: true, onChanged: (_) => setState(() {}), decoration: const InputDecoration(labelText: 'Habit name', hintText: 'Drink water', border: OutlineInputBorder())),
+      TextField(controller: name, autofocus: widget.existing == null, onChanged: (_) => setState(() {}),
+        decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder())), const SizedBox(height: 12),
+      TextField(controller: category, decoration: const InputDecoration(labelText: 'Category', hintText: 'Health, study, home…', border: OutlineInputBorder())),
+      const SizedBox(height: 16), Text('Icon or image', style: Theme.of(context).textTheme.titleMedium), const SizedBox(height: 8),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        ...emojis.map((e) => ChoiceChip(label: Text(e), selected: image == null && emoji == e,
+          onSelected: (_) => setState(() { emoji = e; image = null; }))),
+        ActionChip(avatar: const Icon(Icons.image_outlined), label: Text(image == null ? 'Custom image' : 'Image selected'), onPressed: chooseImage),
+      ]),
+      const SizedBox(height: 10),
+      Wrap(spacing: 8, children: colors.map((c) => ChoiceChip(label: CircleAvatar(radius: 9, backgroundColor: c),
+        selected: color == c, onSelected: (_) => setState(() => color = c))).toList()),
       const SizedBox(height: 12),
       Row(children: [
-        const Expanded(child: Text('Times per day')),
+        Expanded(child: TextField(controller: unit, decoration: const InputDecoration(labelText: 'Unit', border: OutlineInputBorder()))),
+        const SizedBox(width: 8), const Text('Goal'),
         IconButton(onPressed: goal > 1 ? () => setState(() => goal--) : null, icon: const Icon(Icons.remove)),
-        Text('$goal', style: const TextStyle(fontWeight: FontWeight.w700)),
-        IconButton(onPressed: () => setState(() => goal++), icon: const Icon(Icons.add)),
+        Text('$goal'), IconButton(onPressed: () => setState(() => goal++), icon: const Icon(Icons.add)),
       ]),
-      DropdownButtonFormField<String>(initialValue: reminder, decoration: const InputDecoration(labelText: 'Reminder', border: OutlineInputBorder()),
-        items: const ['No reminder', 'At a certain time', 'At regular intervals'].map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
-        onChanged: (v) => setState(() => reminder = v!)),
-      const SizedBox(height: 18),
-      FilledButton(onPressed: name.text.trim().isEmpty ? null : () => widget.onCreate(Habit(
-        name: name.text.trim(), emoji: '🌱', goal: goal, unit: goal == 1 ? 'time' : 'times', reminder: reminder, color: const Color(0xff507d61))), child: const Text('Create habit')),
-    ]),
+      const SizedBox(height: 12),
+      DropdownButtonFormField<ReminderMode>(
+        initialValue: reminderMode, decoration: const InputDecoration(labelText: 'Reminder', border: OutlineInputBorder()),
+        items: const [
+          DropdownMenuItem(value: ReminderMode.none, child: Text('No reminder')),
+          DropdownMenuItem(value: ReminderMode.fixedTime, child: Text('At a certain time')),
+          DropdownMenuItem(value: ReminderMode.interval, child: Text('At regular intervals')),
+        ],
+        onChanged: (v) => setState(() => reminderMode = v!),
+      ),
+      if (reminderMode == ReminderMode.fixedTime)
+        ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.schedule), title: const Text('Reminder time'),
+          subtitle: Text(fixedTime.format(context)), onTap: () => chooseTime('fixed')),
+      if (reminderMode == ReminderMode.interval) ...[
+        const SizedBox(height: 10),
+        DropdownButtonFormField<int>(
+          initialValue: interval, decoration: const InputDecoration(labelText: 'Remind every', border: OutlineInputBorder()),
+          items: [15, 30, 45, 60, 90, 120, 180].map((m) => DropdownMenuItem(value: m, child: Text('$m minutes'))).toList(),
+          onChanged: (v) => setState(() => interval = v!),
+        ),
+        Row(children: [
+          Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: const Text('Start'), subtitle: Text(windowStart.format(context)), onTap: () => chooseTime('start'))),
+          Expanded(child: ListTile(contentPadding: EdgeInsets.zero, title: const Text('End'), subtitle: Text(windowEnd.format(context)), onTap: () => chooseTime('end'))),
+        ]),
+      ],
+      const SizedBox(height: 16),
+      FilledButton(
+        onPressed: name.text.trim().isEmpty ? null : () {
+          final reminder = switch (reminderMode) {
+            ReminderMode.none => const Reminder.none(),
+            ReminderMode.fixedTime => Reminder.fixed(fixedTime),
+            ReminderMode.interval => Reminder.interval(interval, windowStart, windowEnd),
+          };
+          Navigator.pop(context, Habit(
+            name: name.text.trim(), emoji: emoji, goal: goal,
+            unit: unit.text.trim().isEmpty ? 'times' : unit.text.trim(),
+            category: category.text.trim(), reminder: reminder, color: color, imageBytes: image,
+          ));
+        },
+        child: Text(widget.existing == null ? 'Create habit' : 'Save changes'),
+      ),
+    ])),
   );
 }
 
-List<Habit> _demoHabits() {
-  final now = day(DateTime.now());
-  final random = Random(7);
-  Habit make(String name, String emoji, int goal, String unit, String reminder, Color color, double chance) {
-    final history = <DateTime, int>{};
-    for (var i = 0; i < 140; i++) {
-      if (random.nextDouble() < chance) history[now.subtract(Duration(days: i))] = 1 + random.nextInt(goal);
-    }
-    history[now] = 0;
-    return Habit(name: name, emoji: emoji, goal: goal, unit: unit, reminder: reminder, color: color, history: history);
-  }
-  return [
-    make('Drink water', '💧', 8, 'glasses', 'Every 45 min • 9:00–21:00', const Color(0xff3f8fc4), .78),
-    make('Stretch', '🧘', 1, 'session', '18:00', const Color(0xff8a6bb8), .62),
-    make('Read', '📖', 1, 'session', 'No reminder', const Color(0xffd08045), .70),
-  ];
+class AppearanceSheet extends StatefulWidget {
+  const AppearanceSheet({super.key, required this.mode, required this.seed, required this.onChanged});
+  final ThemeMode mode; final Color seed; final void Function(ThemeMode, Color) onChanged;
+  @override State<AppearanceSheet> createState() => _AppearanceSheetState();
+}
+class _AppearanceSheetState extends State<AppearanceSheet> {
+  late ThemeMode mode = widget.mode; late Color seed = widget.seed;
+  static const colors = [Color(0xff507d61), Color(0xff426bba), Color(0xff7655a6), Color(0xffa85468), Color(0xffbd642f), Color(0xff00897b)];
+  @override Widget build(BuildContext context) => Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text('Appearance', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)), const SizedBox(height: 12),
+      SegmentedButton<ThemeMode>(
+        segments: const [
+          ButtonSegment(value: ThemeMode.system, label: Text('System'), icon: Icon(Icons.settings_brightness)),
+          ButtonSegment(value: ThemeMode.light, label: Text('Light'), icon: Icon(Icons.light_mode)),
+          ButtonSegment(value: ThemeMode.dark, label: Text('Dark'), icon: Icon(Icons.dark_mode)),
+        ],
+        selected: {mode}, onSelectionChanged: (v) { setState(() => mode = v.first); widget.onChanged(mode, seed); },
+      ),
+      const SizedBox(height: 20), const Text('Material color'), const SizedBox(height: 10),
+      Wrap(spacing: 10, children: colors.map((c) => ChoiceChip(
+        label: CircleAvatar(backgroundColor: c), selected: seed == c,
+        onSelected: (_) { setState(() => seed = c); widget.onChanged(mode, seed); },
+      )).toList()),
+    ]),
+  );
 }
