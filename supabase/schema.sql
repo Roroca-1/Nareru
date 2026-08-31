@@ -10,6 +10,7 @@ create table public.habits (
   unit text not null default 'times',
   category text not null default '',
   reminder jsonb not null default '{"mode":"none"}'::jsonb,
+  schedule jsonb not null default '{"mode":"everyDay"}'::jsonb,
   icon_base64 text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -50,3 +51,6 @@ create trigger habits_set_updated_at before update on public.habits
   for each row execute function public.set_updated_at();
 create trigger entries_set_updated_at before update on public.habit_entries
   for each row execute function public.set_updated_at();
+
+-- Run this too when upgrading an existing Nareru database:
+alter table public.habits add column if not exists schedule jsonb not null default '{"mode":"everyDay"}'::jsonb;
