@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models.dart';
 import 'nareru_store.dart';
 import 'linux_notifications.dart';
+import 'native_notifications.dart';
 
 Future<void> main(List<String> args) async {
   if (args.length == 2 && args.first == '--notification-worker') {
@@ -15,6 +16,7 @@ Future<void> main(List<String> args) async {
     return;
   }
   WidgetsFlutterBinding.ensureInitialized();
+  await NativeNotifications.initialize();
   const url = String.fromEnvironment('SUPABASE_URL');
   const key = String.fromEnvironment('SUPABASE_ANON_KEY');
   if (url.isNotEmpty && key.isNotEmpty) {
@@ -212,7 +214,7 @@ class _TodayPageState extends State<TodayPage> {
             border: Border.all(color: d == today ? Theme.of(context).colorScheme.primary : Colors.transparent)),
             child: Column(children: [Text(weekday[d.weekday - 1], style: const TextStyle(fontSize: 12)),
               Text('${d.day}', style: const TextStyle(fontWeight: FontWeight.w700)),
-              Text(due.isEmpty ? '—' : '$done/${due.length}', style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant))]))));
+              Text(due.isEmpty ? '—' : '$done/${due.length}', style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant))])))));
       }).toList()),
       const SizedBox(height: 12),
       Text(showAll ? '${widget.habits.length} habits' : '${scheduled.length} scheduled • $complete complete',
@@ -345,7 +347,7 @@ class _SettingsPageState extends State<SettingsPage> {
   NareruStore get store => widget.store;
   String? reminderStatus;
 
-  @override void initState() { super.initState(); if (Platform.isLinux) _loadReminderStatus(); }
+  @override void initState() { super.initState(); _loadReminderStatus(); }
   Future<void> _loadReminderStatus() async {
     final value = await store.notificationStatus();
     if (mounted) setState(() => reminderStatus = value);
@@ -420,21 +422,19 @@ class _SettingsPageState extends State<SettingsPage> {
           subtitle: const Text('Replaces the data currently on this device'),
           onTap: () => _run(context, store.importBackup, 'Backup imported')),
       ])),
-      if (Platform.isLinux) ...[
-        const SizedBox(height: 20),
+      const SizedBox(height: 20),
         Text('Reminders', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
         const SizedBox(height: 8),
         Card(child: Column(children: [
-          ListTile(leading: const Icon(Icons.notifications_active_outlined), title: const Text('Linux reminder service'),
+          ListTile(leading: const Icon(Icons.notifications_active_outlined), title: const Text('Notification service'),
             subtitle: Text(reminderStatus ?? 'Checking…'), trailing: IconButton(icon: const Icon(Icons.refresh), onPressed: _loadReminderStatus)),
           const Divider(height: 1),
           ListTile(leading: const Icon(Icons.notification_add_outlined), title: const Text('Send test notification'),
             onTap: () => _run(context, store.testNotification, 'Test notification sent')),
           ListTile(leading: const Icon(Icons.build_outlined), title: const Text('Repair reminder service'),
-            subtitle: const Text('Recreates and restarts the background timer'),
+            subtitle: Text(Platform.isLinux ? 'Recreates and restarts the background timer' : 'Recreates scheduled native notifications'),
             onTap: () async { await _run(context, store.repairNotifications, 'Reminder service restarted'); await _loadReminderStatus(); }),
         ])),
-      ],
       const SizedBox(height: 20),
       Text('Appearance', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
       const SizedBox(height: 8),
@@ -455,14 +455,13 @@ class HabitEditor extends StatefulWidget {
 class _HabitEditorState extends State<HabitEditor> {
   static const emojis = ['🌱','💪','📖','🧘','🎨','✍️','🏃','🧹','💊','⭐','🎵','🧠'];
   static const colors = [Color(0xff507d61), Color(0xff3f78b5), Color(0xff8b64b1), Color(0xffc06d42), Color(0xffb54d69), Color(0xff00897b)];
-  late final TextEditingController name, unit, category;
+  late final TextEditingController name, unit, category, scheduleInterval;
   late int goal, interval;
   late String emoji;
   late Color color;
   late ReminderMode reminderMode;
   late HabitScheduleMode scheduleMode;
   late Set<int> weekdays;
-  late int intervalDays;
   late TimeOfDay fixedTime, windowStart, windowEnd;
   Uint8List? image;
 
@@ -471,17 +470,17 @@ class _HabitEditorState extends State<HabitEditor> {
     name = TextEditingController(text: h?.name ?? '');
     unit = TextEditingController(text: h?.unit ?? 'times');
     category = TextEditingController(text: h?.category ?? '');
+    scheduleInterval = TextEditingController(text: '${h?.schedule.intervalDays ?? 1}');
     goal = h?.goal ?? 1; emoji = h?.emoji ?? '🌱'; color = h?.color ?? colors.first; image = h?.imageBytes;
     reminderMode = h?.reminder.mode ?? ReminderMode.none;
-    scheduleMode = h?.schedule.mode ?? HabitScheduleMode.everyDay;
+    scheduleMode = h?.schedule.mode ?? HabitScheduleMode.everyXDays;
     weekdays = Set<int>.from(h?.schedule.weekdays ?? {DateTime.monday});
-    intervalDays = h?.schedule.intervalDays ?? 2;
     fixedTime = h?.reminder.time ?? const TimeOfDay(hour: 9, minute: 0);
     interval = h?.reminder.minutes ?? 45;
     windowStart = h?.reminder.start ?? const TimeOfDay(hour: 9, minute: 0);
     windowEnd = h?.reminder.end ?? const TimeOfDay(hour: 21, minute: 0);
   }
-  @override void dispose() { name.dispose(); unit.dispose(); category.dispose(); super.dispose(); }
+  @override void dispose() { name.dispose(); unit.dispose(); category.dispose(); scheduleInterval.dispose(); super.dispose(); }
 
   Future<void> chooseImage() async {
     final file = await FilePicker.pickFile(type: FileType.image);
@@ -533,9 +532,8 @@ class _HabitEditorState extends State<HabitEditor> {
       DropdownButtonFormField<HabitScheduleMode>(
         initialValue: scheduleMode, decoration: const InputDecoration(labelText: 'Schedule', border: OutlineInputBorder()),
         items: const [
-          DropdownMenuItem(value: HabitScheduleMode.everyDay, child: Text('Every day')),
-          DropdownMenuItem(value: HabitScheduleMode.weekdays, child: Text('Certain weekdays')),
-          DropdownMenuItem(value: HabitScheduleMode.interval, child: Text('Every few days')),
+          DropdownMenuItem(value: HabitScheduleMode.everyXDays, child: Text('Every X days')),
+          DropdownMenuItem(value: HabitScheduleMode.weekdays, child: Text('Days in week')),
         ], onChanged: (v) => setState(() => scheduleMode = v!),
       ),
       if (scheduleMode == HabitScheduleMode.weekdays) ...[
@@ -547,13 +545,11 @@ class _HabitEditorState extends State<HabitEditor> {
           }));
         })),
       ],
-      if (scheduleMode == HabitScheduleMode.interval) ...[
+      if (scheduleMode == HabitScheduleMode.everyXDays) ...[
         const SizedBox(height: 10),
-        Row(children: [const Expanded(child: Text('Repeat interval')),
-          IconButton(onPressed: intervalDays > 2 ? () => setState(() => intervalDays--) : null, icon: const Icon(Icons.remove)),
-          Text(intervalDays == 2 ? 'Every other day' : 'Every $intervalDays days'),
-          IconButton(onPressed: intervalDays < 30 ? () => setState(() => intervalDays++) : null, icon: const Icon(Icons.add)),
-        ]),
+        TextField(controller: scheduleInterval, keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Repeat every how many days?', suffixText: 'days', border: OutlineInputBorder())),
+        const SizedBox(height: 6),
         Text('The cycle starts today.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
       ],
       const SizedBox(height: 12),
@@ -590,9 +586,10 @@ class _HabitEditorState extends State<HabitEditor> {
             ReminderMode.interval => Reminder.interval(interval, windowStart, windowEnd),
           };
           final schedule = switch (scheduleMode) {
-            HabitScheduleMode.everyDay => HabitSchedule.everyDay(),
+            HabitScheduleMode.everyXDays => HabitSchedule.interval(
+              (int.tryParse(scheduleInterval.text) ?? 1).clamp(1, 365),
+              widget.existing?.schedule.anchorDate ?? DateTime.now()),
             HabitScheduleMode.weekdays => HabitSchedule.weekdays(weekdays),
-            HabitScheduleMode.interval => HabitSchedule.interval(intervalDays, widget.existing?.schedule.anchorDate ?? DateTime.now()),
           };
           Navigator.pop(context, Habit(
             name: name.text.trim(), emoji: emoji, goal: goal,
