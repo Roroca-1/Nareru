@@ -1,3 +1,3 @@
 # Nareru
 
-**慣れる (nareru)** get used to it.
+**慣れる** get used to it.
