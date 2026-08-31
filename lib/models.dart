@@ -8,15 +8,15 @@ String dateKey(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.to
 
 enum ReminderMode { none, fixedTime, interval }
 
-enum HabitScheduleMode { everyDay, weekdays, interval }
+enum HabitScheduleMode { everyXDays, weekdays }
 
 class HabitSchedule {
   HabitSchedule.everyDay()
-    : mode = HabitScheduleMode.everyDay, weekdays = <int>{}, intervalDays = 1, anchorDate = day(DateTime.now());
+    : mode = HabitScheduleMode.everyXDays, weekdays = <int>{}, intervalDays = 1, anchorDate = day(DateTime.now());
   HabitSchedule.weekdays(Set<int> days)
     : mode = HabitScheduleMode.weekdays, weekdays = days, intervalDays = 1, anchorDate = day(DateTime.now());
   HabitSchedule.interval(this.intervalDays, DateTime anchor)
-    : mode = HabitScheduleMode.interval, weekdays = <int>{}, anchorDate = day(anchor);
+    : mode = HabitScheduleMode.everyXDays, weekdays = <int>{}, anchorDate = day(anchor);
 
   final HabitScheduleMode mode;
   final Set<int> weekdays;
@@ -24,15 +24,13 @@ class HabitSchedule {
   final DateTime anchorDate;
 
   bool isDue(DateTime value) => switch (mode) {
-    HabitScheduleMode.everyDay => true,
+    HabitScheduleMode.everyXDays => day(value).difference(anchorDate).inDays % intervalDays == 0,
     HabitScheduleMode.weekdays => weekdays.contains(value.weekday),
-    HabitScheduleMode.interval => day(value).difference(anchorDate).inDays % intervalDays == 0,
   };
 
   String get label => switch (mode) {
-    HabitScheduleMode.everyDay => 'Every day',
+    HabitScheduleMode.everyXDays => intervalDays == 1 ? 'Every day' : 'Every $intervalDays days',
     HabitScheduleMode.weekdays => _weekdayLabel(weekdays),
-    HabitScheduleMode.interval => intervalDays == 2 ? 'Every other day' : 'Every $intervalDays days',
   };
 
   Map<String, dynamic> toJson() => {
@@ -42,15 +40,14 @@ class HabitSchedule {
 
   factory HabitSchedule.fromJson(Map<String, dynamic>? json) {
     if (json == null) return HabitSchedule.everyDay();
-    final mode = HabitScheduleMode.values.firstWhere(
-      (e) => e.name == json['mode'], orElse: () => HabitScheduleMode.everyDay);
+    final rawMode = json['mode']?.toString();
+    final mode = rawMode == 'weekdays' ? HabitScheduleMode.weekdays : HabitScheduleMode.everyXDays;
     return switch (mode) {
-      HabitScheduleMode.everyDay => HabitSchedule.everyDay(),
+      HabitScheduleMode.everyXDays => HabitSchedule.interval(
+        rawMode == 'everyDay' ? 1 : ((json['interval_days'] as num?)?.toInt() ?? 1).clamp(1, 365),
+        DateTime.tryParse(json['anchor_date']?.toString() ?? '') ?? DateTime.now()),
       HabitScheduleMode.weekdays => HabitSchedule.weekdays(
         (json['weekdays'] as List? ?? const []).map((e) => (e as num).toInt()).toSet()),
-      HabitScheduleMode.interval => HabitSchedule.interval(
-        ((json['interval_days'] as num?)?.toInt() ?? 2).clamp(2, 365),
-        DateTime.tryParse(json['anchor_date']?.toString() ?? '') ?? DateTime.now()),
     };
   }
 
