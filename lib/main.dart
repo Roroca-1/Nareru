@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
@@ -73,7 +74,7 @@ class _HabitShellState extends State<HabitShell> {
   void _refresh() { if (mounted) setState(() {}); }
   @override void dispose() { store.removeListener(_refresh); store.dispose(); super.dispose(); }
 
-  void log(Habit h, [int delta = 1]) => store.log(h, delta);
+  void log(Habit h, DateTime date, [int delta = 1]) => store.log(h, delta, date);
 
   Future<void> edit([Habit? old]) async {
     final h = await showModalBottomSheet<Habit>(
@@ -91,6 +92,7 @@ class _HabitShellState extends State<HabitShell> {
         ..unit = h.unit
         ..category = h.category
         ..reminder = h.reminder
+        ..schedule = h.schedule
         ..color = h.color
         ..imageBytes = h.imageBytes;
       await store.update(old);
@@ -118,14 +120,12 @@ class _HabitShellState extends State<HabitShell> {
 
   @override Widget build(BuildContext context) {
     final pages = [
-      TodayPage(habits: habits, onLog: log, onCreate: () => edit()),
-      HabitsPage(habits: habits, onCreate: () => edit(), onEdit: edit, onDelete: remove),
+      TodayPage(habits: habits, onLog: log, onEdit: edit, onDelete: remove),
       TrackingPage(habits: habits),
       SettingsPage(store: store, onAppearance: appearance),
     ];
     const nav = [
       NavigationDestination(icon: Icon(Icons.today_outlined), selectedIcon: Icon(Icons.today), label: 'This week'),
-      NavigationDestination(icon: Icon(Icons.checklist_outlined), selectedIcon: Icon(Icons.checklist), label: 'Habits'),
       NavigationDestination(icon: Icon(Icons.insights_outlined), selectedIcon: Icon(Icons.insights), label: 'Tracking'),
       NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
     ];
@@ -133,19 +133,25 @@ class _HabitShellState extends State<HabitShell> {
     if (MediaQuery.sizeOf(context).width < 760) {
       return Scaffold(
         body: body,
+        floatingActionButton: page == 0 ? FloatingActionButton.extended(
+          onPressed: () => edit(), icon: const Icon(Icons.add), label: const Text('New habit')) : null,
+        floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
         bottomNavigationBar: NavigationBar(selectedIndex: page, destinations: nav, onDestinationSelected: (v) => setState(() => page = v)),
       );
     }
     return Scaffold(body: Row(children: [
       NavigationRail(
-        selectedIndex: page, labelType: NavigationRailLabelType.all,
+        selectedIndex: page < 2 ? page : null, labelType: NavigationRailLabelType.all,
         onDestinationSelected: (v) => setState(() => page = v),
         trailing: Expanded(child: Align(alignment: Alignment.bottomCenter,
-          child: Padding(padding: const EdgeInsets.only(bottom: 16), child: IconButton(onPressed: appearance, icon: const Icon(Icons.palette_outlined), tooltip: 'Appearance')))),
-        destinations: nav.map((n) => NavigationRailDestination(icon: n.icon, selectedIcon: n.selectedIcon, label: Text(n.label))).toList(),
+          child: Padding(padding: const EdgeInsets.only(bottom: 16), child: IconButton(
+            onPressed: () => setState(() => page = 2), icon: const Icon(Icons.settings_outlined), tooltip: 'Settings')))),
+        destinations: nav.take(2).map((n) => NavigationRailDestination(icon: n.icon, selectedIcon: n.selectedIcon, label: Text(n.label))).toList(),
       ),
       const VerticalDivider(width: 1), Expanded(child: body),
-    ]));
+    ]), floatingActionButton: page == 0 ? FloatingActionButton.extended(
+      onPressed: () => edit(), icon: const Icon(Icons.add), label: const Text('New habit')) : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat);
   }
 }
 
@@ -171,30 +177,70 @@ class EmptyState extends StatelessWidget {
   ));
 }
 
-class TodayPage extends StatelessWidget {
-  const TodayPage({super.key, required this.habits, required this.onLog, required this.onCreate});
-  final List<Habit> habits; final void Function(Habit, [int]) onLog; final VoidCallback onCreate;
-  @override Widget build(BuildContext context) => Frame(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-    Text('This week', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
-    const SizedBox(height: 16),
-    Expanded(child: habits.isEmpty
-      ? EmptyState(icon: Icons.spa_outlined, title: 'Start with one small thing',
-          message: 'Nareru has no default habits. Create only what matters to you.',
-          action: FilledButton.icon(onPressed: onCreate, icon: const Icon(Icons.add), label: const Text('Create habit')))
-      : ListView.separated(
-          itemCount: habits.length, separatorBuilder: (_, __) => const SizedBox(height: 10),
-          itemBuilder: (_, i) {
-            final h = habits[i], n = h.count(DateTime.now());
-            return Card(child: ListTile(
-              leading: HabitAvatar(habit: h), title: Text(h.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: Text('$n / ${h.goal} ${h.unit} • ${h.reminder.label(context)}'),
-              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                if (n > 0) IconButton(onPressed: () => onLog(h, -1), icon: const Icon(Icons.undo), tooltip: 'Undo'),
-                FilledButton.tonal(onPressed: () => onLog(h), child: Text(n >= h.goal ? '+1' : 'Done')),
-              ]),
-            ));
-          })),
-  ]));
+class TodayPage extends StatefulWidget {
+  const TodayPage({super.key, required this.habits, required this.onLog, required this.onEdit, required this.onDelete});
+  final List<Habit> habits;
+  final void Function(Habit, DateTime, [int]) onLog;
+  final ValueChanged<Habit> onEdit, onDelete;
+  @override State<TodayPage> createState() => _TodayPageState();
+}
+
+class _TodayPageState extends State<TodayPage> {
+  DateTime selected = day(DateTime.now());
+  bool showAll = false;
+  @override Widget build(BuildContext context) {
+    final today = day(DateTime.now());
+    final monday = today.subtract(Duration(days: today.weekday - 1));
+    final week = List.generate(7, (i) => monday.add(Duration(days: i)));
+    final scheduled = widget.habits.where((h) => h.schedule.isDue(selected)).toList();
+    final shown = showAll ? widget.habits : scheduled;
+    final complete = scheduled.where((h) => h.count(selected) >= h.goal).length;
+    const weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return Frame(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        Expanded(child: Text('This week', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700))),
+        FilterChip(label: const Text('All habits'), selected: showAll, onSelected: (v) => setState(() => showAll = v)),
+      ]),
+      const SizedBox(height: 12),
+      Row(children: week.map((d) {
+        final due = widget.habits.where((h) => h.schedule.isDue(d)).toList();
+        final done = due.where((h) => h.count(d) >= h.goal).length;
+        return Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: InkWell(
+          borderRadius: BorderRadius.circular(14), onTap: () => setState(() { selected = d; showAll = false; }),
+          child: Container(padding: const EdgeInsets.symmetric(vertical: 9), decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14), color: day(selected) == d ? Theme.of(context).colorScheme.primaryContainer : null,
+            border: Border.all(color: d == today ? Theme.of(context).colorScheme.primary : Colors.transparent)),
+            child: Column(children: [Text(weekday[d.weekday - 1], style: const TextStyle(fontSize: 12)),
+              Text('${d.day}', style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text(due.isEmpty ? '—' : '$done/${due.length}', style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant))]))));
+      }).toList()),
+      const SizedBox(height: 12),
+      Text(showAll ? '${widget.habits.length} habits' : '${scheduled.length} scheduled • $complete complete',
+        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      const SizedBox(height: 10),
+      Expanded(child: widget.habits.isEmpty
+        ? const EmptyState(icon: Icons.spa_outlined, title: 'Start with one small thing',
+            message: 'Nareru has no default habits. Use New habit below to begin.')
+        : shown.isEmpty
+          ? const EmptyState(icon: Icons.event_available_outlined, title: 'Nothing scheduled',
+              message: 'Choose another day or open All habits to manage your habits.')
+          : ListView.separated(padding: const EdgeInsets.only(bottom: 84), itemCount: shown.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (_, i) {
+                final h = shown[i], n = h.count(selected), due = h.schedule.isDue(selected);
+                return Card(child: ListTile(
+                  leading: HabitAvatar(habit: h), onTap: () => widget.onEdit(h),
+                  title: Text(h.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  subtitle: Text(showAll ? '${h.schedule.label} • ${h.reminder.label(context)}' : '$n / ${h.goal} ${h.unit} • ${h.schedule.label}'),
+                  trailing: showAll || !due ? PopupMenuButton<String>(onSelected: (v) => v == 'edit' ? widget.onEdit(h) : widget.onDelete(h),
+                    itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))])
+                    : Row(mainAxisSize: MainAxisSize.min, children: [
+                      if (n > 0) IconButton(onPressed: () => widget.onLog(h, selected, -1), icon: const Icon(Icons.undo), tooltip: 'Undo'),
+                      FilledButton.tonal(onPressed: () => widget.onLog(h, selected), child: Text(n >= h.goal ? '+1' : 'Done')),
+                    ]),
+                ));
+              })),
+    ]));
+  }
 }
 
 class HabitsPage extends StatelessWidget {
@@ -288,10 +334,22 @@ class HabitDetailPage extends StatelessWidget {
   }
 }
 
-class SettingsPage extends StatelessWidget {
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.store, required this.onAppearance});
   final NareruStore store;
   final VoidCallback onAppearance;
+  @override State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  NareruStore get store => widget.store;
+  String? reminderStatus;
+
+  @override void initState() { super.initState(); if (Platform.isLinux) _loadReminderStatus(); }
+  Future<void> _loadReminderStatus() async {
+    final value = await store.notificationStatus();
+    if (mounted) setState(() => reminderStatus = value);
+  }
 
   Future<void> _run(BuildContext context, Future<void> Function() action, String success) async {
     try {
@@ -303,6 +361,17 @@ class SettingsPage extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
       }
+    }
+  }
+
+  Future<void> _export(BuildContext context) async {
+    try {
+      final path = await store.exportBackup();
+      if (path != null && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Backup saved to $path')));
+      }
+    } catch (error) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
     }
   }
 
@@ -344,18 +413,33 @@ class SettingsPage extends StatelessWidget {
       const SizedBox(height: 8),
       Card(child: Column(children: [
         ListTile(leading: const Icon(Icons.file_download_outlined), title: const Text('Export JSON backup'),
-          subtitle: const Text('Save a portable copy of all habits and progress'),
-          onTap: () => _run(context, () async { await store.exportBackup(); }, 'Backup exported')),
+          subtitle: const Text('Defaults to the folder where Nareru is installed'),
+          onTap: () => _export(context)),
         const Divider(height: 1),
         ListTile(leading: const Icon(Icons.file_upload_outlined), title: const Text('Import JSON backup'),
           subtitle: const Text('Replaces the data currently on this device'),
           onTap: () => _run(context, store.importBackup, 'Backup imported')),
       ])),
+      if (Platform.isLinux) ...[
+        const SizedBox(height: 20),
+        Text('Reminders', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        Card(child: Column(children: [
+          ListTile(leading: const Icon(Icons.notifications_active_outlined), title: const Text('Linux reminder service'),
+            subtitle: Text(reminderStatus ?? 'Checking…'), trailing: IconButton(icon: const Icon(Icons.refresh), onPressed: _loadReminderStatus)),
+          const Divider(height: 1),
+          ListTile(leading: const Icon(Icons.notification_add_outlined), title: const Text('Send test notification'),
+            onTap: () => _run(context, store.testNotification, 'Test notification sent')),
+          ListTile(leading: const Icon(Icons.build_outlined), title: const Text('Repair reminder service'),
+            subtitle: const Text('Recreates and restarts the background timer'),
+            onTap: () async { await _run(context, store.repairNotifications, 'Reminder service restarted'); await _loadReminderStatus(); }),
+        ])),
+      ],
       const SizedBox(height: 20),
       Text('Appearance', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
       const SizedBox(height: 8),
       Card(child: ListTile(leading: const Icon(Icons.palette_outlined), title: const Text('Theme and Material color'),
-        trailing: const Icon(Icons.chevron_right), onTap: onAppearance)),
+        trailing: const Icon(Icons.chevron_right), onTap: widget.onAppearance)),
       const SizedBox(height: 16),
       Text('Nareru always saves locally first. Cloud sync is optional and JSON backups remain readable without Nareru.',
         style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
@@ -376,6 +460,9 @@ class _HabitEditorState extends State<HabitEditor> {
   late String emoji;
   late Color color;
   late ReminderMode reminderMode;
+  late HabitScheduleMode scheduleMode;
+  late Set<int> weekdays;
+  late int intervalDays;
   late TimeOfDay fixedTime, windowStart, windowEnd;
   Uint8List? image;
 
@@ -386,6 +473,9 @@ class _HabitEditorState extends State<HabitEditor> {
     category = TextEditingController(text: h?.category ?? '');
     goal = h?.goal ?? 1; emoji = h?.emoji ?? '🌱'; color = h?.color ?? colors.first; image = h?.imageBytes;
     reminderMode = h?.reminder.mode ?? ReminderMode.none;
+    scheduleMode = h?.schedule.mode ?? HabitScheduleMode.everyDay;
+    weekdays = Set<int>.from(h?.schedule.weekdays ?? {DateTime.monday});
+    intervalDays = h?.schedule.intervalDays ?? 2;
     fixedTime = h?.reminder.time ?? const TimeOfDay(hour: 9, minute: 0);
     interval = h?.reminder.minutes ?? 45;
     windowStart = h?.reminder.start ?? const TimeOfDay(hour: 9, minute: 0);
@@ -440,6 +530,33 @@ class _HabitEditorState extends State<HabitEditor> {
         Text('$goal'), IconButton(onPressed: () => setState(() => goal++), icon: const Icon(Icons.add)),
       ]),
       const SizedBox(height: 12),
+      DropdownButtonFormField<HabitScheduleMode>(
+        initialValue: scheduleMode, decoration: const InputDecoration(labelText: 'Schedule', border: OutlineInputBorder()),
+        items: const [
+          DropdownMenuItem(value: HabitScheduleMode.everyDay, child: Text('Every day')),
+          DropdownMenuItem(value: HabitScheduleMode.weekdays, child: Text('Certain weekdays')),
+          DropdownMenuItem(value: HabitScheduleMode.interval, child: Text('Every few days')),
+        ], onChanged: (v) => setState(() => scheduleMode = v!),
+      ),
+      if (scheduleMode == HabitScheduleMode.weekdays) ...[
+        const SizedBox(height: 10),
+        Wrap(spacing: 6, children: List.generate(7, (i) {
+          const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S']; final value = i + 1;
+          return FilterChip(label: Text(labels[i]), selected: weekdays.contains(value), onSelected: (selected) => setState(() {
+            if (selected) { weekdays.add(value); } else if (weekdays.length > 1) { weekdays.remove(value); }
+          }));
+        })),
+      ],
+      if (scheduleMode == HabitScheduleMode.interval) ...[
+        const SizedBox(height: 10),
+        Row(children: [const Expanded(child: Text('Repeat interval')),
+          IconButton(onPressed: intervalDays > 2 ? () => setState(() => intervalDays--) : null, icon: const Icon(Icons.remove)),
+          Text(intervalDays == 2 ? 'Every other day' : 'Every $intervalDays days'),
+          IconButton(onPressed: intervalDays < 30 ? () => setState(() => intervalDays++) : null, icon: const Icon(Icons.add)),
+        ]),
+        Text('The cycle starts today.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      ],
+      const SizedBox(height: 12),
       DropdownButtonFormField<ReminderMode>(
         initialValue: reminderMode, decoration: const InputDecoration(labelText: 'Reminder', border: OutlineInputBorder()),
         items: const [
@@ -472,10 +589,15 @@ class _HabitEditorState extends State<HabitEditor> {
             ReminderMode.fixedTime => Reminder.fixed(fixedTime),
             ReminderMode.interval => Reminder.interval(interval, windowStart, windowEnd),
           };
+          final schedule = switch (scheduleMode) {
+            HabitScheduleMode.everyDay => HabitSchedule.everyDay(),
+            HabitScheduleMode.weekdays => HabitSchedule.weekdays(weekdays),
+            HabitScheduleMode.interval => HabitSchedule.interval(intervalDays, widget.existing?.schedule.anchorDate ?? DateTime.now()),
+          };
           Navigator.pop(context, Habit(
             name: name.text.trim(), emoji: emoji, goal: goal,
             unit: unit.text.trim().isEmpty ? 'times' : unit.text.trim(),
-            category: category.text.trim(), reminder: reminder, color: color, imageBytes: image,
+            category: category.text.trim(), reminder: reminder, schedule: schedule, color: color, imageBytes: image,
           ));
         },
         child: Text(widget.existing == null ? 'Create habit' : 'Save changes'),
