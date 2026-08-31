@@ -33,8 +33,28 @@ AccuracySec=1s
 [Install]
 WantedBy=timers.target
 ''');
-    await Process.run('systemctl', ['--user', 'daemon-reload']);
-    await Process.run('systemctl', ['--user', 'enable', '--now', 'nareru-reminders.timer']);
+    await _runChecked('systemctl', ['--user', 'daemon-reload']);
+    await _runChecked('systemctl', ['--user', 'enable', '--now', 'nareru-reminders.timer']);
+  }
+
+  static Future<String> status() async {
+    if (!Platform.isLinux) return 'Desktop reminders are currently available on Linux.';
+    final notifier = await Process.run('which', ['notify-send']);
+    if (notifier.exitCode != 0) return 'notify-send is missing. Install libnotify-bin/libnotify.';
+    final timer = await Process.run('systemctl', ['--user', 'is-active', 'nareru-reminders.timer']);
+    if (timer.exitCode != 0) {
+      final detail = '${timer.stderr}'.trim();
+      return 'Reminder timer is not active${detail.isEmpty ? '' : ': $detail'}';
+    }
+    return 'Reminder timer is active • notify-send is available';
+  }
+
+  static Future<void> test() async {
+    if (!Platform.isLinux) throw StateError('Test notifications are currently available on Linux.');
+    await _runChecked('notify-send', [
+      '--app-name=Nareru', '--icon=appointment-soon', 'Nareru test',
+      'Notifications are working. You can close this message.',
+    ]);
   }
 
   static Future<void> runWorker(String dataPath) async {
@@ -54,7 +74,7 @@ WantedBy=timers.target
       final reminder = Map<String, dynamic>.from(habit['reminder'] as Map? ?? const {});
       final goal = (habit['goal'] as num?)?.toInt() ?? 1;
       final count = ((habit['history'] as Map?)?[date] as num?)?.toInt() ?? 0;
-      if (count >= goal) {
+      if (count >= goal || !_isScheduled(habit['schedule'], now)) {
         continue;
       }
       final mode = reminder['mode'];
@@ -72,12 +92,36 @@ WantedBy=timers.target
         }
       }
       if (due) {
-        await Process.run('notify-send', [
+        await _runChecked('notify-send', [
           '--app-name=Nareru', '--icon=appointment-soon',
           '${habit['emoji'] ?? '🌱'} ${habit['name'] ?? 'Habit'}',
           'Time for your habit • $count / $goal ${habit['unit'] ?? 'times'} today',
         ]);
       }
+    }
+  }
+
+  static bool _isScheduled(Object? raw, DateTime now) {
+    final schedule = Map<String, dynamic>.from(raw as Map? ?? const {});
+    final mode = schedule['mode'] ?? 'everyDay';
+    if (mode == 'weekdays') {
+      return (schedule['weekdays'] as List? ?? const []).any((e) => (e as num).toInt() == now.weekday);
+    }
+    if (mode == 'interval') {
+      final interval = ((schedule['interval_days'] as num?)?.toInt() ?? 2).clamp(2, 365);
+      final anchor = DateTime.tryParse(schedule['anchor_date']?.toString() ?? '') ?? now;
+      final today = DateTime(now.year, now.month, now.day);
+      final origin = DateTime(anchor.year, anchor.month, anchor.day);
+      return today.difference(origin).inDays % interval == 0;
+    }
+    return true;
+  }
+
+  static Future<void> _runChecked(String command, List<String> arguments) async {
+    final result = await Process.run(command, arguments);
+    if (result.exitCode != 0) {
+      final detail = '${result.stderr}'.trim().isEmpty ? '${result.stdout}'.trim() : '${result.stderr}'.trim();
+      throw StateError('$command failed (${result.exitCode})${detail.isEmpty ? '' : ': $detail'}');
     }
   }
 
