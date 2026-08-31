@@ -228,7 +228,7 @@ class _TodayPageState extends State<TodayPage> {
                 const Spacer(),
                 Text(due.isEmpty ? 'Free day' : '$done/${due.length} habits • $count/$goals',
                   maxLines: 1, style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-              ]));
+              ])));
         }
         if (constraints.maxWidth < 760) {
           return SizedBox(height: 144, child: ListView.separated(scrollDirection: Axis.horizontal, itemCount: week.length,
