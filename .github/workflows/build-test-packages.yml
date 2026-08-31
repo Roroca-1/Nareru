@@ -1,0 +1,85 @@
+name: Build test packages
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter create . --platforms=android
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nareru-android-debug
+          path: build/app/outputs/flutter-apk/app-debug.apk
+
+  desktop:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            platform: linux
+            command: flutter build linux --debug
+            artifact: build/linux/x64/debug/bundle
+          - name: Windows
+            os: windows-latest
+            platform: windows
+            command: flutter build windows --debug
+            artifact: build/windows/x64/runner/Debug
+          - name: macOS
+            os: macos-latest
+            platform: macos
+            command: flutter build macos --debug
+            artifact: build/macos/Build/Products/Debug/*.app
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev libblkid-dev liblzma-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter create . --platforms=${{ matrix.platform }}
+      - run: flutter pub get
+      - run: ${{ matrix.command }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nareru-${{ matrix.platform }}-debug
+          path: ${{ matrix.artifact }}
+
+  ios:
+    name: iOS unsigned
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter create . --platforms=ios
+      - run: flutter pub get
+      - run: flutter build ios --debug --no-codesign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nareru-ios-unsigned-debug
+          path: build/ios/iphoneos/Runner.app
