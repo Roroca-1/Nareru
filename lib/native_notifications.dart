@@ -77,7 +77,7 @@ class NativeNotifications {
           final when = date.add(Duration(minutes: minutes));
           if (!when.isAfter(now) || id >= 1060) continue;
           await _plugin.zonedSchedule(
-            id++, title: '${habit.emoji} ${habit.name}',
+            id: id++, title: '${habit.emoji} ${habit.name}',
             body: 'Time for your habit • goal ${habit.goal} ${habit.unit}',
             scheduledDate: tz.TZDateTime.from(when.toUtc(), tz.UTC),
             notificationDetails: _details,
@@ -95,7 +95,9 @@ class NativeNotifications {
       final start = reminder.start!.hour * 60 + reminder.start!.minute;
       final end = reminder.end!.hour * 60 + reminder.end!.minute;
       final limit = end >= start ? end : end + 1440;
-      for (var value = start; value <= limit; value += reminder.minutes!) yield value;
+      for (var value = start; value <= limit; value += reminder.minutes!) {
+        yield value;
+      }
     }
   }
 }
