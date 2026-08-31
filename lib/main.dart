@@ -1,38 +1,25 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'models.dart';
+import 'nareru_store.dart';
+import 'linux_notifications.dart';
 
-void main() => runApp(const NareruApp());
-DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
-
-enum ReminderMode { none, fixedTime, interval }
-
-class Reminder {
-  const Reminder.none() : mode = ReminderMode.none, time = null, minutes = null, start = null, end = null;
-  const Reminder.fixed(this.time) : mode = ReminderMode.fixedTime, minutes = null, start = null, end = null;
-  const Reminder.interval(this.minutes, this.start, this.end) : mode = ReminderMode.interval, time = null;
-  final ReminderMode mode;
-  final TimeOfDay? time, start, end;
-  final int? minutes;
-  String label(BuildContext c) => switch (mode) {
-    ReminderMode.none => 'No reminder',
-    ReminderMode.fixedTime => 'Every day at ${time!.format(c)}',
-    ReminderMode.interval => 'Every $minutes min • ${start!.format(c)}–${end!.format(c)}',
-  };
-}
-
-class Habit {
-  Habit({required this.name, required this.emoji, required this.goal, required this.unit,
-    required this.category, required this.reminder, required this.color, this.imageBytes,
-    Map<DateTime, int>? history}) : history = history ?? {};
-  String name, emoji, unit, category;
-  int goal;
-  Reminder reminder;
-  Color color;
-  Uint8List? imageBytes;
-  final Map<DateTime, int> history;
-  int count(DateTime d) => history[day(d)] ?? 0;
+Future<void> main(List<String> args) async {
+  if (args.length == 2 && args.first == '--notification-worker') {
+    await LinuxNotifications.runWorker(args[1]);
+    return;
+  }
+  WidgetsFlutterBinding.ensureInitialized();
+  const url = String.fromEnvironment('SUPABASE_URL');
+  const key = String.fromEnvironment('SUPABASE_ANON_KEY');
+  if (url.isNotEmpty && key.isNotEmpty) {
+    await Supabase.initialize(url: url, anonKey: key);
+  }
+  runApp(const NareruApp());
 }
 
 class NareruApp extends StatefulWidget {
@@ -65,12 +52,28 @@ class HabitShell extends StatefulWidget {
 
 class _HabitShellState extends State<HabitShell> {
   int page = 0;
-  final habits = <Habit>[];
+  final store = NareruStore();
+  List<Habit> get habits => store.habits;
 
-  void log(Habit h, [int delta = 1]) => setState(() {
-    final d = day(DateTime.now());
-    h.history[d] = max(0, h.count(d) + delta);
-  });
+  @override void initState() {
+    super.initState();
+    store.addListener(_refresh);
+    store.load();
+    if (store.cloudConfigured) {
+      Supabase.instance.client.auth.onAuthStateChange.listen((event) {
+        if (mounted) {
+          setState(() {});
+          if (event.session != null) {
+            unawaited(store.sync());
+          }
+        }
+      });
+    }
+  }
+  void _refresh() { if (mounted) setState(() {}); }
+  @override void dispose() { store.removeListener(_refresh); store.dispose(); super.dispose(); }
+
+  void log(Habit h, [int delta = 1]) => store.log(h, delta);
 
   Future<void> edit([Habit? old]) async {
     final h = await showModalBottomSheet<Habit>(
@@ -78,21 +81,20 @@ class _HabitShellState extends State<HabitShell> {
       builder: (_) => HabitEditor(existing: old),
     );
     if (h == null) return;
-    setState(() {
-      if (old == null) {
-        habits.add(h);
-      } else {
-        old
-          ..name = h.name
-          ..emoji = h.emoji
-          ..goal = h.goal
-          ..unit = h.unit
-          ..category = h.category
-          ..reminder = h.reminder
-          ..color = h.color
-          ..imageBytes = h.imageBytes;
-      }
-    });
+    if (old == null) {
+      await store.add(h);
+    } else {
+      old
+        ..name = h.name
+        ..emoji = h.emoji
+        ..goal = h.goal
+        ..unit = h.unit
+        ..category = h.category
+        ..reminder = h.reminder
+        ..color = h.color
+        ..imageBytes = h.imageBytes;
+      await store.update(old);
+    }
   }
 
   Future<void> remove(Habit h) async {
@@ -104,7 +106,9 @@ class _HabitShellState extends State<HabitShell> {
         FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
       ],
     ));
-    if (yes == true) setState(() => habits.remove(h));
+    if (yes == true) {
+      await store.remove(h);
+    }
   }
 
   void appearance() => showModalBottomSheet<void>(
@@ -117,16 +121,17 @@ class _HabitShellState extends State<HabitShell> {
       TodayPage(habits: habits, onLog: log, onCreate: () => edit()),
       HabitsPage(habits: habits, onCreate: () => edit(), onEdit: edit, onDelete: remove),
       TrackingPage(habits: habits),
+      SettingsPage(store: store, onAppearance: appearance),
     ];
     const nav = [
       NavigationDestination(icon: Icon(Icons.today_outlined), selectedIcon: Icon(Icons.today), label: 'This week'),
       NavigationDestination(icon: Icon(Icons.checklist_outlined), selectedIcon: Icon(Icons.checklist), label: 'Habits'),
       NavigationDestination(icon: Icon(Icons.insights_outlined), selectedIcon: Icon(Icons.insights), label: 'Tracking'),
+      NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
     ];
     final body = IndexedStack(index: page, children: pages);
     if (MediaQuery.sizeOf(context).width < 760) {
       return Scaffold(
-        appBar: AppBar(actions: [IconButton(onPressed: appearance, icon: const Icon(Icons.palette_outlined), tooltip: 'Appearance')]),
         body: body,
         bottomNavigationBar: NavigationBar(selectedIndex: page, destinations: nav, onDestinationSelected: (v) => setState(() => page = v)),
       );
@@ -280,6 +285,81 @@ class HabitDetailPage extends StatelessWidget {
         const SizedBox(height: 10), Text('Darker squares mean more completions.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
       ]))),
     ])));
+  }
+}
+
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key, required this.store, required this.onAppearance});
+  final NareruStore store;
+  final VoidCallback onAppearance;
+
+  Future<void> _run(BuildContext context, Future<void> Function() action, String success) async {
+    try {
+      await action();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(success)));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
+  }
+
+  @override Widget build(BuildContext context) {
+    final user = store.user;
+    final syncSubtitle = !store.cloudConfigured
+      ? 'Local-only build — add Supabase configuration to enable'
+      : user == null
+        ? 'Sign in once to sync habits across devices'
+        : store.syncing
+          ? 'Syncing…'
+          : store.syncError ?? (store.lastSync == null ? 'Signed in as ${user.email}' : 'Last synced ${store.lastSync}');
+    return Frame(child: ListView(children: [
+      Text('Settings', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 20),
+      Text('Account & sync', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 8),
+      Card(child: Column(children: [
+        ListTile(
+          leading: Icon(user == null ? Icons.cloud_off_outlined : Icons.cloud_done_outlined),
+          title: Text(user == null ? 'Cloud sync' : user.email ?? 'Google account'),
+          subtitle: Text(syncSubtitle),
+          trailing: store.syncing ? const SizedBox.square(dimension: 22, child: CircularProgressIndicator(strokeWidth: 2)) : null,
+        ),
+        if (store.cloudConfigured && user == null)
+          Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 16), child: SizedBox(width: double.infinity,
+            child: FilledButton.icon(onPressed: () => _run(context, store.signIn, 'Continue sign-in in your browser'),
+              icon: const Icon(Icons.login), label: const Text('Continue with Google')))),
+        if (user != null) ...[
+          const Divider(height: 1),
+          ListTile(leading: const Icon(Icons.sync), title: const Text('Sync now'),
+            onTap: store.syncing ? null : () => _run(context, store.sync, 'Sync complete')),
+          ListTile(leading: const Icon(Icons.logout), title: const Text('Sign out'),
+            onTap: () => _run(context, store.signOut, 'Signed out')),
+        ],
+      ])),
+      const SizedBox(height: 20),
+      Text('Data & backups', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 8),
+      Card(child: Column(children: [
+        ListTile(leading: const Icon(Icons.file_download_outlined), title: const Text('Export JSON backup'),
+          subtitle: const Text('Save a portable copy of all habits and progress'),
+          onTap: () => _run(context, () async { await store.exportBackup(); }, 'Backup exported')),
+        const Divider(height: 1),
+        ListTile(leading: const Icon(Icons.file_upload_outlined), title: const Text('Import JSON backup'),
+          subtitle: const Text('Replaces the data currently on this device'),
+          onTap: () => _run(context, store.importBackup, 'Backup imported')),
+      ])),
+      const SizedBox(height: 20),
+      Text('Appearance', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 8),
+      Card(child: ListTile(leading: const Icon(Icons.palette_outlined), title: const Text('Theme and Material color'),
+        trailing: const Icon(Icons.chevron_right), onTap: onAppearance)),
+      const SizedBox(height: 16),
+      Text('Nareru always saves locally first. Cloud sync is optional and JSON backups remain readable without Nareru.',
+        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+    ]));
   }
 }
 
