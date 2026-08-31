@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: nareru-test-builds-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   android:
     name: Android APK
@@ -78,8 +82,8 @@ jobs:
           cache: true
       - run: flutter create . --platforms=ios
       - run: flutter pub get
-      - run: flutter build ios --debug --no-codesign
+      - run: flutter build ios --simulator --debug
       - uses: actions/upload-artifact@v4
         with:
           name: nareru-ios-unsigned-debug
-          path: build/ios/iphoneos/Runner.app
+          path: build/ios/iphonesimulator/Runner.app
