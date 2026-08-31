@@ -314,8 +314,11 @@ class _HabitEditorState extends State<HabitEditor> {
   @override void dispose() { name.dispose(); unit.dispose(); category.dispose(); super.dispose(); }
 
   Future<void> chooseImage() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
-    if (result != null && result.files.single.bytes != null) setState(() => image = result.files.single.bytes);
+    final file = await FilePicker.pickFile(type: FileType.image);
+    if (file != null) {
+      final bytes = await file.readAsBytes();
+      if (mounted) setState(() => image = bytes);
+    }
   }
   Future<void> chooseTime(String target) async {
     final initial = target == 'fixed' ? fixedTime : target == 'start' ? windowStart : windowEnd;
