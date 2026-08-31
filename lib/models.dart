@@ -8,6 +8,59 @@ String dateKey(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.to
 
 enum ReminderMode { none, fixedTime, interval }
 
+enum HabitScheduleMode { everyDay, weekdays, interval }
+
+class HabitSchedule {
+  HabitSchedule.everyDay()
+    : mode = HabitScheduleMode.everyDay, weekdays = <int>{}, intervalDays = 1, anchorDate = day(DateTime.now());
+  HabitSchedule.weekdays(Set<int> days)
+    : mode = HabitScheduleMode.weekdays, weekdays = days, intervalDays = 1, anchorDate = day(DateTime.now());
+  HabitSchedule.interval(this.intervalDays, DateTime anchor)
+    : mode = HabitScheduleMode.interval, weekdays = <int>{}, anchorDate = day(anchor);
+
+  final HabitScheduleMode mode;
+  final Set<int> weekdays;
+  final int intervalDays;
+  final DateTime anchorDate;
+
+  bool isDue(DateTime value) => switch (mode) {
+    HabitScheduleMode.everyDay => true,
+    HabitScheduleMode.weekdays => weekdays.contains(value.weekday),
+    HabitScheduleMode.interval => day(value).difference(anchorDate).inDays % intervalDays == 0,
+  };
+
+  String get label => switch (mode) {
+    HabitScheduleMode.everyDay => 'Every day',
+    HabitScheduleMode.weekdays => _weekdayLabel(weekdays),
+    HabitScheduleMode.interval => intervalDays == 2 ? 'Every other day' : 'Every $intervalDays days',
+  };
+
+  Map<String, dynamic> toJson() => {
+    'mode': mode.name, 'weekdays': weekdays.toList()..sort(),
+    'interval_days': intervalDays, 'anchor_date': dateKey(anchorDate),
+  };
+
+  factory HabitSchedule.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return HabitSchedule.everyDay();
+    final mode = HabitScheduleMode.values.firstWhere(
+      (e) => e.name == json['mode'], orElse: () => HabitScheduleMode.everyDay);
+    return switch (mode) {
+      HabitScheduleMode.everyDay => HabitSchedule.everyDay(),
+      HabitScheduleMode.weekdays => HabitSchedule.weekdays(
+        (json['weekdays'] as List? ?? const []).map((e) => (e as num).toInt()).toSet()),
+      HabitScheduleMode.interval => HabitSchedule.interval(
+        ((json['interval_days'] as num?)?.toInt() ?? 2).clamp(2, 365),
+        DateTime.tryParse(json['anchor_date']?.toString() ?? '') ?? DateTime.now()),
+    };
+  }
+
+  static String _weekdayLabel(Set<int> values) {
+    const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    if (values.isEmpty) return 'No days selected';
+    return [for (var i = 1; i <= 7; i++) if (values.contains(i)) names[i - 1]].join(', ');
+  }
+}
+
 class Reminder {
   const Reminder.none() : mode = ReminderMode.none, time = null, minutes = null, start = null, end = null;
   const Reminder.fixed(this.time) : mode = ReminderMode.fixedTime, minutes = null, start = null, end = null;
@@ -54,10 +107,10 @@ class Habit {
   Habit({
     String? id, required this.name, required this.emoji, required this.goal,
     required this.unit, required this.category, required this.reminder,
-    required this.color, this.imageBytes, Map<DateTime, int>? history,
+    required this.color, HabitSchedule? schedule, this.imageBytes, Map<DateTime, int>? history,
     DateTime? createdAt, DateTime? updatedAt,
   }) : id = id ?? const Uuid().v4(),
-       history = history ?? {},
+       schedule = schedule ?? HabitSchedule.everyDay(), history = history ?? {},
        createdAt = createdAt ?? DateTime.now().toUtc(),
        updatedAt = updatedAt ?? DateTime.now().toUtc();
 
@@ -65,6 +118,7 @@ class Habit {
   String name, emoji, unit, category;
   int goal;
   Reminder reminder;
+  HabitSchedule schedule;
   Color color;
   Uint8List? imageBytes;
   final Map<DateTime, int> history;
@@ -75,7 +129,7 @@ class Habit {
 
   Map<String, dynamic> toJson() => {
     'id': id, 'name': name, 'emoji': emoji, 'goal': goal, 'unit': unit,
-    'category': category, 'reminder': reminder.toJson(),
+    'category': category, 'reminder': reminder.toJson(), 'schedule': schedule.toJson(),
     'color': color.toARGB32(), 'image': imageBytes == null ? null : base64Encode(imageBytes!),
     'created_at': createdAt.toIso8601String(), 'updated_at': updatedAt.toIso8601String(),
     'history': {for (final e in history.entries) dateKey(e.key): e.value},
@@ -92,6 +146,7 @@ class Habit {
       emoji: json['emoji'] as String? ?? '🌱', goal: (json['goal'] as num?)?.toInt() ?? 1,
       unit: json['unit'] as String? ?? 'times', category: json['category'] as String? ?? '',
       reminder: Reminder.fromJson(json['reminder'] as Map<String, dynamic>?),
+      schedule: HabitSchedule.fromJson(json['schedule'] as Map<String, dynamic>?),
       color: Color((json['color'] as num?)?.toInt() ?? 0xff507d61),
       imageBytes: image == null ? null : base64Decode(image), history: history,
       createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),
