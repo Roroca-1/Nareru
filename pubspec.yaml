@@ -23,3 +23,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/branding/nareru_light.png
+    - assets/branding/nareru_dark.png

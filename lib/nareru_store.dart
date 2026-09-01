@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -16,6 +17,8 @@ class NareruStore extends ChangeNotifier {
   bool loading = true, syncing = false;
   DateTime? lastSync;
   String? syncError;
+  String linuxReminderMode = 'systemService';
+  Timer? _appReminderTimer;
 
   bool get cloudConfigured => const String.fromEnvironment('SUPABASE_URL').isNotEmpty &&
     const String.fromEnvironment('SUPABASE_ANON_KEY').isNotEmpty;
@@ -32,8 +35,7 @@ class NareruStore extends ChangeNotifier {
       if (await file.exists()) {
         _replaceFromJson(jsonDecode(await file.readAsString()) as Map<String, dynamic>);
       }
-      await LinuxNotifications.refresh(file);
-      await NativeNotifications.reschedule(habits);
+      await _configureNotifications(file);
     } catch (error) {
       syncError = error.toString();
     } finally {
@@ -47,9 +49,11 @@ class NareruStore extends ChangeNotifier {
     'exported_at': DateTime.now().toUtc().toIso8601String(),
     'habits': habits.map((h) => h.toJson()).toList(),
     'deleted_habits': deletedHabits.map((id, time) => MapEntry(id, time.toIso8601String())),
+    'linux_reminder_mode': linuxReminderMode,
   };
 
   void _replaceFromJson(Map<String, dynamic> json) {
+    linuxReminderMode = json['linux_reminder_mode']?.toString() == 'appOnly' ? 'appOnly' : 'systemService';
     habits
       ..clear()
       ..addAll((json['habits'] as List? ?? []).map((e) => Habit.fromJson(Map<String, dynamic>.from(e as Map))));
@@ -71,8 +75,7 @@ class NareruStore extends ChangeNotifier {
     }
     if (refreshNotifications) {
       try {
-        await LinuxNotifications.refresh(file);
-        await NativeNotifications.reschedule(habits);
+        await _configureNotifications(file);
       } catch (error) {
         syncError = 'Reminder setup failed: $error';
       }
@@ -84,6 +87,20 @@ class NareruStore extends ChangeNotifier {
   Future<void> update(Habit habit) async { habit.touch(); await save(refreshNotifications: true); }
   Future<void> remove(Habit habit) async {
     habits.remove(habit); deletedHabits[habit.id] = DateTime.now().toUtc(); await save(refreshNotifications: true);
+  }
+  Future<void> removeMany(Iterable<Habit> selected) async {
+    for (final habit in selected.toList()) {
+      habits.remove(habit);
+      deletedHabits[habit.id] = DateTime.now().toUtc();
+    }
+    await save(refreshNotifications: true);
+  }
+  Future<void> categorizeMany(Iterable<Habit> selected, String category) async {
+    for (final habit in selected) {
+      habit.category = category.trim();
+      habit.touch();
+    }
+    await save();
   }
   Future<void> log(Habit habit, int delta, [DateTime? date]) async {
     final d = day(date ?? DateTime.now());
@@ -111,11 +128,42 @@ class NareruStore extends ChangeNotifier {
   }
 
   Future<String> notificationStatus() => Platform.isLinux
-    ? LinuxNotifications.status()
+    ? linuxReminderMode == 'appOnly'
+      ? Future.value('Nareru checks reminders while this app is open')
+      : LinuxNotifications.status()
     : Future.value('Uses ${Platform.operatingSystem} native notifications');
   Future<void> repairNotifications() async {
-    await LinuxNotifications.refresh(await _file);
+    await _configureNotifications(await _file);
+  }
+  Future<void> setLinuxReminderMode(String mode) async {
+    linuxReminderMode = mode;
+    await save();
+    await _configureNotifications(await _file);
+    notifyListeners();
+  }
+
+  Future<void> _configureNotifications(File file) async {
+    if (Platform.isLinux) {
+      _appReminderTimer?.cancel();
+      _appReminderTimer = null;
+      if (linuxReminderMode == 'appOnly') {
+        await LinuxNotifications.disable();
+        await NativeNotifications.checkDueNow(habits);
+        _appReminderTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+          NativeNotifications.checkDueNow(habits);
+        });
+      } else {
+        await LinuxNotifications.refresh(file);
+      }
+      return;
+    }
     await NativeNotifications.reschedule(habits);
+  }
+
+  @override
+  void dispose() {
+    _appReminderTimer?.cancel();
+    super.dispose();
   }
   Future<void> testNotification() => NativeNotifications.test();
 

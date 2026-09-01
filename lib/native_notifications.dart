@@ -9,6 +9,7 @@ import 'models.dart';
 class NativeNotifications {
   static final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
+  static final Set<String> _deliveredWhileOpen = <String>{};
 
   static final _details = NotificationDetails(
     android: const AndroidNotificationDetails(
@@ -61,6 +62,31 @@ class NativeNotifications {
       body: 'Notifications are working on this device.',
       notificationDetails: _details,
     );
+  }
+
+  static Future<void> checkDueNow(List<Habit> habits) async {
+    if (!Platform.isLinux) return;
+    await initialize();
+    final now = DateTime.now();
+    final currentMinute = DateTime(now.year, now.month, now.day, now.hour, now.minute);
+    _deliveredWhileOpen.removeWhere((key) {
+      final stamp = DateTime.tryParse(key.split('|').last);
+      return stamp != null && stamp.isBefore(currentMinute.subtract(const Duration(days: 1)));
+    });
+    for (final habit in habits) {
+      final key = '${habit.id}|${currentMinute.toIso8601String()}';
+      if (_deliveredWhileOpen.contains(key) || habit.count(now) >= habit.goal ||
+          !habit.schedule.isDue(now) || !_times(habit.reminder).contains(now.hour * 60 + now.minute)) {
+        continue;
+      }
+      await _plugin.show(
+        id: habit.id.hashCode & 0x7fffffff,
+        title: '${habit.emoji} ${habit.name}',
+        body: 'Time for your habit • ${habit.count(now)} / ${habit.goal} ${habit.unit} today',
+        notificationDetails: _details,
+      );
+      _deliveredWhileOpen.add(key);
+    }
   }
 
   static Future<void> reschedule(List<Habit> habits) async {

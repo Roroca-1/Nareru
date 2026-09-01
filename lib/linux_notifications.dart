@@ -2,6 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 
 class LinuxNotifications {
+  static Future<void> disable() async {
+    if (!Platform.isLinux) return;
+    await Process.run('systemctl', ['--user', 'disable', '--now', 'nareru-reminders.timer']);
+  }
+
   static Future<void> refresh(File dataFile) async {
     if (!Platform.isLinux) {
       return;

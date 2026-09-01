@@ -115,6 +115,33 @@ class _HabitShellState extends State<HabitShell> {
     }
   }
 
+  Future<void> categorizeMany(List<Habit> habits) async {
+    final controller = TextEditingController();
+    final category = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: Text('Categorize ${habits.length} habits'),
+      content: TextField(controller: controller, autofocus: true,
+        decoration: const InputDecoration(labelText: 'Category', hintText: 'Health, study, home…')),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Apply')),
+      ],
+    ));
+    controller.dispose();
+    if (category != null) await store.categorizeMany(habits, category);
+  }
+
+  Future<void> removeMany(List<Habit> habits) async {
+    final yes = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: Text('Delete ${habits.length} habits?'),
+      content: const Text('Their completion history will also be deleted.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+      ],
+    ));
+    if (yes == true) await store.removeMany(habits);
+  }
+
   void appearance() => showModalBottomSheet<void>(
     context: context, showDragHandle: true,
     builder: (_) => AppearanceSheet(mode: widget.themeMode, seed: widget.seed, onChanged: widget.onTheme),
@@ -122,7 +149,8 @@ class _HabitShellState extends State<HabitShell> {
 
   @override Widget build(BuildContext context) {
     final pages = [
-      TodayPage(habits: habits, onLog: log, onEdit: edit, onDelete: remove),
+      TodayPage(habits: habits, onLog: log, onEdit: edit, onDelete: remove,
+        onCategorize: categorizeMany, onBulkDelete: removeMany),
       TrackingPage(habits: habits),
       SettingsPage(store: store, onAppearance: appearance),
     ];
@@ -164,6 +192,16 @@ class Frame extends StatelessWidget {
       child: Padding(padding: const EdgeInsets.all(20), child: child))));
 }
 
+class BrandMark extends StatelessWidget {
+  const BrandMark({super.key, this.size = 42});
+  final double size;
+  @override Widget build(BuildContext context) => ClipRRect(borderRadius: BorderRadius.circular(size * .22), child: Image.asset(
+    Theme.of(context).brightness == Brightness.dark
+      ? 'assets/branding/nareru_dark.png' : 'assets/branding/nareru_light.png',
+    width: size, height: size, fit: BoxFit.cover,
+  ));
+}
+
 class EmptyState extends StatelessWidget {
   const EmptyState({super.key, required this.icon, required this.title, required this.message, this.action});
   final IconData icon; final String title, message; final Widget? action;
@@ -180,16 +218,27 @@ class EmptyState extends StatelessWidget {
 }
 
 class TodayPage extends StatefulWidget {
-  const TodayPage({super.key, required this.habits, required this.onLog, required this.onEdit, required this.onDelete});
+  const TodayPage({super.key, required this.habits, required this.onLog, required this.onEdit,
+    required this.onDelete, required this.onCategorize, required this.onBulkDelete});
   final List<Habit> habits;
   final void Function(Habit, DateTime, [int]) onLog;
   final ValueChanged<Habit> onEdit, onDelete;
+  final Future<void> Function(List<Habit>) onCategorize, onBulkDelete;
   @override State<TodayPage> createState() => _TodayPageState();
 }
 
 class _TodayPageState extends State<TodayPage> {
   DateTime selected = day(DateTime.now());
   bool showAll = false;
+  final selectedHabitIds = <String>{};
+
+  List<Habit> get selectedHabits => widget.habits.where((h) => selectedHabitIds.contains(h.id)).toList();
+
+  void showDay(DateTime date, List<Habit> due) {
+    showModalBottomSheet<void>(context: context, showDragHandle: true, isScrollControlled: true,
+      builder: (context) => FractionallySizedBox(heightFactor: .72, child: _DayDetails(
+        date: date, habits: due, onLog: widget.onLog)));
+  }
   @override Widget build(BuildContext context) {
     final today = day(DateTime.now());
     final monday = today.subtract(Duration(days: today.weekday - 1));
@@ -198,11 +247,16 @@ class _TodayPageState extends State<TodayPage> {
     final shown = showAll ? widget.habits : scheduled;
     final complete = scheduled.where((h) => h.count(selected) >= h.goal).length;
     const weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const kanji = ['月', '火', '水', '木', '金', '土', '日'];
+    const motif = ['🌙', '🔥', '💧', '🌳', '✨', '⛰️', '☀️'];
+    const tint = [Color(0xff263b70), Color(0xff9c3b31), Color(0xff256b86), Color(0xff39704b),
+      Color(0xff9a761d), Color(0xff79563b), Color(0xffbf681f)];
     return Frame(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
+        const BrandMark(), const SizedBox(width: 10),
         Expanded(child: Text('This week', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700))),
         FilterChip(label: const Text('Manage habits'), avatar: const Icon(Icons.edit_outlined, size: 18),
-          selected: showAll, onSelected: (v) => setState(() => showAll = v)),
+          selected: showAll, onSelected: (v) => setState(() { showAll = v; selectedHabitIds.clear(); })),
       ]),
       const SizedBox(height: 12),
       LayoutBuilder(builder: (context, constraints) {
@@ -211,33 +265,51 @@ class _TodayPageState extends State<TodayPage> {
           final done = due.where((h) => h.count(d) >= h.goal).length;
           final count = due.fold<int>(0, (sum, h) => sum + h.count(d));
           final goals = due.fold<int>(0, (sum, h) => sum + h.goal);
-          return InkWell(borderRadius: BorderRadius.circular(16), onTap: () => setState(() { selected = d; showAll = false; }),
-            child: Container(width: 128, height: 144, padding: const EdgeInsets.all(10), decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16), color: day(selected) == d ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceContainerLow,
+          final color = tint[d.weekday - 1];
+          return InkWell(borderRadius: BorderRadius.circular(16), onTap: () => setState(() { selected = d; showAll = false; selectedHabitIds.clear(); }),
+            child: Container(width: 128, height: 150, padding: const EdgeInsets.all(10), decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16), gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
+                colors: [color.withValues(alpha: day(selected) == d ? .38 : .24), color.withValues(alpha: .08)]),
               border: Border.all(color: d == today ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.outlineVariant)),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              child: Stack(children: [
+                Positioned(right: -2, bottom: 5, child: Text(kanji[d.weekday - 1], style: TextStyle(
+                  fontSize: 58, fontWeight: FontWeight.w900, color: color.withValues(alpha: .15)))),
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [Expanded(child: Text(weekday[d.weekday - 1], style: const TextStyle(fontWeight: FontWeight.w700))),
+                  Text(motif[d.weekday - 1]), const SizedBox(width: 4),
                   Text('${d.day}', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800))]),
                 const SizedBox(height: 7),
                 if (due.isEmpty) Text('No habits', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant))
                 else ...[
-                  ...due.take(3).map((h) => Padding(padding: const EdgeInsets.only(bottom: 3), child: Text('${h.emoji} ${h.name}',
+                  ...due.take(2).map((h) => Padding(padding: const EdgeInsets.only(bottom: 3), child: Text('${h.emoji} ${h.name}',
                     maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)))),
-                  if (due.length > 3) Text('+${due.length - 3} more', style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                  if (due.length > 2) InkWell(onTap: () => showDay(d, due), borderRadius: BorderRadius.circular(8),
+                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      child: Text('…  +${due.length - 2}', style: TextStyle(fontWeight: FontWeight.w800, color: color)))),
                 ],
                 const Spacer(),
                 Text(due.isEmpty ? 'Free day' : '$done/${due.length} habits • $count/$goals',
                   maxLines: 1, style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-              ])));
+              ])])));
         }
         if (constraints.maxWidth < 760) {
-          return SizedBox(height: 144, child: ListView.separated(scrollDirection: Axis.horizontal, itemCount: week.length,
+          return SizedBox(height: 150, child: ListView.separated(scrollDirection: Axis.horizontal, itemCount: week.length,
             separatorBuilder: (_, __) => const SizedBox(width: 8), itemBuilder: (_, i) => card(week[i])));
         }
         return Row(crossAxisAlignment: CrossAxisAlignment.start, children: week.map((d) => Expanded(
           child: Padding(padding: const EdgeInsets.symmetric(horizontal: 3), child: card(d)))).toList());
       }),
       const SizedBox(height: 12),
+      if (showAll && selectedHabitIds.isNotEmpty) ...[
+        Card(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), child: Row(children: [
+          Expanded(child: Text('${selectedHabitIds.length} selected', style: const TextStyle(fontWeight: FontWeight.w700))),
+          TextButton.icon(onPressed: () async { await widget.onCategorize(selectedHabits); if (mounted) setState(selectedHabitIds.clear); },
+            icon: const Icon(Icons.label_outline), label: const Text('Categorize')),
+          TextButton.icon(onPressed: () async { await widget.onBulkDelete(selectedHabits); if (mounted) setState(selectedHabitIds.clear); },
+            icon: const Icon(Icons.delete_outline), label: const Text('Delete')),
+        ]))),
+        const SizedBox(height: 8),
+      ],
       Text(showAll ? '${widget.habits.length} habits' : '${scheduled.length} scheduled • $complete complete',
         style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
       const SizedBox(height: 10),
@@ -251,7 +323,11 @@ class _TodayPageState extends State<TodayPage> {
               separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (_, i) {
                 final h = shown[i], n = h.count(selected), due = h.schedule.isDue(selected);
                 return Card(child: ListTile(
-                  leading: HabitAvatar(habit: h), onTap: () => widget.onEdit(h),
+                  leading: showAll ? Checkbox(value: selectedHabitIds.contains(h.id), onChanged: (_) => setState(() {
+                    selectedHabitIds.contains(h.id) ? selectedHabitIds.remove(h.id) : selectedHabitIds.add(h.id);
+                  })) : HabitAvatar(habit: h),
+                  onTap: showAll ? () => setState(() { selectedHabitIds.contains(h.id)
+                    ? selectedHabitIds.remove(h.id) : selectedHabitIds.add(h.id); }) : () => widget.onEdit(h),
                   title: Text(h.name, style: const TextStyle(fontWeight: FontWeight.w700)),
                   subtitle: Text(showAll ? '${h.schedule.label} • ${h.reminder.label(context)}' : '$n / ${h.goal} ${h.unit} • ${h.schedule.label}'),
                   trailing: showAll || !due ? PopupMenuButton<String>(onSelected: (v) => v == 'edit' ? widget.onEdit(h) : widget.onDelete(h),
@@ -262,6 +338,47 @@ class _TodayPageState extends State<TodayPage> {
                     ]),
                 ));
               })),
+    ]));
+  }
+}
+
+class _DayDetails extends StatefulWidget {
+  const _DayDetails({required this.date, required this.habits, required this.onLog});
+  final DateTime date;
+  final List<Habit> habits;
+  final void Function(Habit, DateTime, [int]) onLog;
+  @override State<_DayDetails> createState() => _DayDetailsState();
+}
+
+class _DayDetailsState extends State<_DayDetails> {
+  @override Widget build(BuildContext context) {
+    const names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const kanji = ['月', '火', '水', '木', '金', '土', '日'];
+    const motif = ['🌙', '🔥', '💧', '🌳', '✨', '⛰️', '☀️'];
+    final completed = widget.habits.where((h) => h.count(widget.date) >= h.goal).length;
+    return Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 20), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        Text('${kanji[widget.date.weekday - 1]} ${motif[widget.date.weekday - 1]}',
+          style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(names[widget.date.weekday - 1], style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+          Text('${widget.date.year}-${widget.date.month.toString().padLeft(2, '0')}-${widget.date.day.toString().padLeft(2, '0')} • $completed/${widget.habits.length} complete'),
+        ])),
+      ]),
+      const SizedBox(height: 16),
+      Expanded(child: widget.habits.isEmpty
+        ? const EmptyState(icon: Icons.event_available_outlined, title: 'Free day', message: 'No habits are scheduled for this day.')
+        : ListView.separated(itemCount: widget.habits.length, separatorBuilder: (_, __) => const SizedBox(height: 8), itemBuilder: (context, index) {
+          final habit = widget.habits[index];
+          final count = habit.count(widget.date);
+          return Card(child: ListTile(
+            leading: HabitAvatar(habit: habit), title: Text(habit.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: Text('$count / ${habit.goal} ${habit.unit}'),
+            trailing: FilledButton.tonal(onPressed: () { widget.onLog(habit, widget.date); setState(() {}); },
+              child: Text(count >= habit.goal ? '+1' : 'Done')),
+          ));
+        })),
     ]));
   }
 }
@@ -447,6 +564,19 @@ class _SettingsPageState extends State<SettingsPage> {
         Text('Reminders', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
         const SizedBox(height: 8),
         Card(child: Column(children: [
+          if (Platform.isLinux) ...[
+            RadioGroup<String>(groupValue: store.linuxReminderMode, onChanged: (value) async {
+              if (value == null) return;
+              await _run(context, () => store.setLinuxReminderMode(value), 'Linux reminder mode updated');
+              await _loadReminderStatus();
+            }, child: const Column(children: [
+              RadioListTile<String>(value: 'systemService', title: Text('Background system service'),
+                subtitle: Text('Uses a user systemd timer; reminders continue after Nareru closes.')),
+              RadioListTile<String>(value: 'appOnly', title: Text('While Nareru is open'),
+                subtitle: Text('Nareru keeps time itself; reminders stop when the app closes.')),
+            ])),
+            Divider(height: 1),
+          ],
           ListTile(leading: const Icon(Icons.notifications_active_outlined), title: const Text('Notification service'),
             subtitle: Text(reminderStatus ?? 'Checking…'), trailing: IconButton(icon: const Icon(Icons.refresh), onPressed: _loadReminderStatus)),
           const Divider(height: 1),
