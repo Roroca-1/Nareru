@@ -330,8 +330,9 @@ class _TodayPageState extends State<TodayPage> {
                     ? selectedHabitIds.remove(h.id) : selectedHabitIds.add(h.id); }) : () => widget.onEdit(h),
                   title: Text(h.name, style: const TextStyle(fontWeight: FontWeight.w700)),
                   subtitle: Text(showAll ? '${h.schedule.label} • ${h.reminder.label(context)}' : '$n / ${h.goal} ${h.unit} • ${h.schedule.label}'),
-                  trailing: showAll || !due ? PopupMenuButton<String>(onSelected: (v) => v == 'edit' ? widget.onEdit(h) : widget.onDelete(h),
-                    itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))])
+                  trailing: showAll ? null : !due
+                    ? PopupMenuButton<String>(onSelected: (v) => v == 'edit' ? widget.onEdit(h) : widget.onDelete(h),
+                      itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit')), PopupMenuItem(value: 'delete', child: Text('Delete'))])
                     : Row(mainAxisSize: MainAxisSize.min, children: [
                       if (n > 0) IconButton(onPressed: () => widget.onLog(h, selected, -1), icon: const Icon(Icons.undo), tooltip: 'Undo'),
                       FilledButton.tonal(onPressed: () => widget.onLog(h, selected), child: Text(n >= h.goal ? '+1' : 'Done')),

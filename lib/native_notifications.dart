@@ -44,8 +44,9 @@ class NativeNotifications {
 
   static Future<void> _requestPermissions() async {
     if (Platform.isAndroid) {
-      await _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+      final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      await android?.requestNotificationsPermission();
+      await android?.requestExactAlarmsPermission();
     } else if (Platform.isIOS) {
       await _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, badge: true, sound: true);
@@ -95,20 +96,33 @@ class NativeNotifications {
     await _plugin.cancelAll();
     final now = DateTime.now();
     var id = 1000;
-    for (var offset = 0; offset < 30 && id < 1060; offset++) {
+    final maximum = Platform.isIOS ? 1060 : 1500;
+    for (var offset = 0; offset < 30 && id < maximum; offset++) {
       final date = day(now.add(Duration(days: offset)));
       for (final habit in habits) {
         if (!habit.schedule.isDue(date) || habit.reminder.mode == ReminderMode.none) continue;
         for (final minutes in _times(habit.reminder)) {
           final when = date.add(Duration(minutes: minutes));
-          if (!when.isAfter(now) || id >= 1060) continue;
-          await _plugin.zonedSchedule(
-            id: id++, title: '${habit.emoji} ${habit.name}',
+          if (!when.isAfter(now) || id >= maximum) continue;
+          final notificationId = id++;
+          final scheduledDate = tz.TZDateTime.from(when.toUtc(), tz.UTC);
+          try {
+            await _plugin.zonedSchedule(
+              id: notificationId, title: '${habit.emoji} ${habit.name}',
+              body: 'Time for your habit • goal ${habit.goal} ${habit.unit}',
+              scheduledDate: scheduledDate, notificationDetails: _details,
+              androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            );
+          } catch (_) {
+            // Exact alarms may be denied by the user or device policy. Inexact
+            // delivery is still preferable to silently losing the reminder.
+            await _plugin.zonedSchedule(
+            id: notificationId, title: '${habit.emoji} ${habit.name}',
             body: 'Time for your habit • goal ${habit.goal} ${habit.unit}',
-            scheduledDate: tz.TZDateTime.from(when.toUtc(), tz.UTC),
-            notificationDetails: _details,
+            scheduledDate: scheduledDate, notificationDetails: _details,
             androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-          );
+            );
+          }
         }
       }
     }
